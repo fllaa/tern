@@ -275,14 +275,13 @@ async fn clear_secret_for(state: &State<'_, AppState>, id: i64) -> Result<(), St
 pub async fn delete_host(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     blocking(&state, move |store| {
         // Best-effort keyring cleanup before the row goes: once the record is
-        // deleted the account name is unrecoverable and the entry would linger
-        // in the OS keychain forever. A keyring failure must not block the
-        // delete the user asked for.
-        if let Ok(Some(host)) = store.hosts().get(id)
-            && let Some(account) = host.secret_ref.as_deref()
-        {
-            let _ = auth::clear_secret(account);
-        }
+        // deleted the account names are unrecoverable and the entries would
+        // linger in the OS keychain forever. Both accounts are cleared by id
+        // rather than the current `secret_ref`, because a host's credentialed
+        // method may have changed over its life and left a secret under the
+        // other account. A keyring failure must not block the delete.
+        let _ = auth::clear_secret(&auth::password_account(id));
+        let _ = auth::clear_secret(&auth::passphrase_account(id));
         store.hosts().delete(id).map_err(|e| e.to_string())
     })
     .await

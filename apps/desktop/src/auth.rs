@@ -29,14 +29,21 @@ pub fn passphrase_account(host_id: HostId) -> String {
     format!("host/{host_id}/passphrase")
 }
 
-/// The account a host's `secret_ref` should point at, given its auth method.
+/// The keyring account this host stores its single credential under.
+///
+/// Taken from the whole auth chain, not just the primary method. A host's chain
+/// carries at most one credential-bearing method — a password or a key
+/// passphrase; agent needs none — so the account is unambiguous. Scanning the
+/// chain rather than the primary is what lets an "agent, then password" host
+/// store its password even though agent leads and needs nothing itself.
 pub fn account_for(host: &Host) -> Option<String> {
-    match host.auth {
-        AuthKind::Password => Some(password_account(host.id)),
-        AuthKind::KeyFile => Some(passphrase_account(host.id)),
-        // Agent auth has nothing to store.
-        AuthKind::Agent => None,
-    }
+    std::iter::once(host.auth)
+        .chain(host.auth_fallbacks.iter().copied())
+        .find_map(|kind| match kind {
+            AuthKind::Password => Some(password_account(host.id)),
+            AuthKind::KeyFile => Some(passphrase_account(host.id)),
+            AuthKind::Agent => None,
+        })
 }
 
 fn keyring() -> OsKeyring {
@@ -206,5 +213,26 @@ mod tests {
         let pw = account_for(&host_with(AuthKind::Password)).expect("account");
         let key = account_for(&host_with(AuthKind::KeyFile)).expect("account");
         assert_ne!(pw, key);
+    }
+
+    /// The reason `account_for` scans the chain rather than the primary: an
+    /// agent-first host with a password fallback must still have somewhere to
+    /// store that password, or the fallback is inert.
+    #[test]
+    fn an_agent_host_with_a_password_fallback_stores_under_the_password_account() {
+        let host = host_with_fallbacks(AuthKind::Agent, &[AuthKind::Password]);
+        assert_eq!(
+            account_for(&host),
+            Some(password_account(host.id)),
+            "the credentialed fallback, not the agent primary, decides the account"
+        );
+    }
+
+    /// An all-agent host has no credential anywhere in its chain, so there is
+    /// nothing to store and no keyring entry to leak.
+    #[test]
+    fn an_agent_only_chain_has_no_account() {
+        let host = host_with_fallbacks(AuthKind::Agent, &[AuthKind::Agent]);
+        assert!(account_for(&host).is_none());
     }
 }
