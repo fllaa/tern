@@ -7,3 +7,19 @@ UseDNS no
 AllowTcpForwarding yes
 AcceptEnv TERM
 Subsystem sftp internal-sftp
+
+# OpenSSH 9.8+ penalises a source IP after a failed authentication and then
+# drops its subsequent connections. The suite deliberately authenticates with a
+# wrong password (wrong_password_fails), so with penalties on it poisons itself:
+# every other test connecting from the same IP gets dropped with
+# Protocol(Disconnect). It presents as flakiness that worsens across runs as
+# penalties accumulate, and it scales with parallelism — which is why it only
+# surfaced once the workspace grew enough test binaries to run the rig tests
+# concurrently. Brute-force protection is meaningless on a loopback fixture
+# whose credentials are published in this repo.
+PerSourcePenalties no
+
+# Same reasoning: connection throttling has no purpose here, and the suite
+# opens every session at once.
+MaxStartups 100:30:200
+MaxSessions 100
