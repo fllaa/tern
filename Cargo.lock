@@ -5062,6 +5062,8 @@ dependencies = [
  "tauri-build",
  "tern-core-pty",
  "tern-core-ssh",
+ "tern-core-store",
+ "tern-core-vault",
  "tern-proto",
  "tern-term-stream",
  "tokio",

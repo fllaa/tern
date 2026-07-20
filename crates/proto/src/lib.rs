@@ -9,6 +9,13 @@
 
 use serde::{Deserialize, Serialize};
 
+mod store;
+
+pub use store::{
+    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KnownHostEntryDto,
+    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, TagDto,
+};
+
 /// Opaque identifier for a terminal session (SSH or local PTY).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub String);
@@ -25,6 +32,16 @@ impl std::fmt::Display for SessionId {
 pub enum Target {
     Ssh(SshTarget),
     LocalPty(LocalPtyTarget),
+    /// A host from the store, connected by id.
+    ///
+    /// This is the path the product UI uses, and it is a security property
+    /// rather than a convenience: for a saved host **no credential ever
+    /// crosses the IPC boundary**. The Rust side reads `secret_ref` and
+    /// resolves the secret from the OS keyring itself. `Ssh` survives only
+    /// for ad-hoc quick-connect, where there is no stored secret to resolve.
+    SavedHost {
+        host_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,13 +102,41 @@ pub struct ResizeReq {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SessionEvent {
+    /// First contact with an unknown host key. The UI prompts; the connect
+    /// blocks until `approve_host_key` answers.
     HostKeyPrompt {
         host: String,
         port: u16,
         algorithm: String,
         fingerprint_sha256: String,
     },
+    /// A recorded key for this host and algorithm does not match what the
+    /// server offered.
+    ///
+    /// Deliberately a separate variant from `HostKeyPrompt`, not a flag on it:
+    /// this path must never render as the same "do you want to continue?"
+    /// dialog. The connect is already refused by the time this arrives —
+    /// recovery is an explicit `remove_known_host` followed by a reconnect,
+    /// which then presents as ordinary first contact.
+    HostKeyChanged {
+        host: String,
+        port: u16,
+        algorithm: String,
+        recorded_fingerprint: String,
+        presented_fingerprint: String,
+        known_hosts_path: String,
+        known_hosts_line: usize,
+    },
+    /// The host key is on file as `@revoked`.
+    HostKeyRevoked {
+        host: String,
+        port: u16,
+        known_hosts_path: String,
+        known_hosts_line: usize,
+    },
     Connected,
+    /// The transport died. Distinct from `Exited`, which means the remote
+    /// shell ended on its own — only this one should trigger a reconnect.
     Disconnected {
         reason: String,
     },

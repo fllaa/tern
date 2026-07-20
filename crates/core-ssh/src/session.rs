@@ -36,6 +36,10 @@ pub struct HostKeyInfo {
     pub algorithm: String,
     /// OpenSSH-style `SHA256:…` fingerprint.
     pub fingerprint_sha256: String,
+    /// The key itself, so the callback can check it against `known_hosts` and
+    /// record it on accept. The fingerprint alone is a display string — it
+    /// cannot be written back to a `known_hosts` file.
+    pub public_key: russh::keys::ssh_key::PublicKey,
 }
 
 /// Async host-key decision callback: return `true` to trust and continue.
@@ -67,6 +71,7 @@ impl client::Handler for ClientHandler {
             port: self.port,
             algorithm: key.algorithm().to_string(),
             fingerprint_sha256: key.fingerprint(HashAlg::Sha256).to_string(),
+            public_key: key.clone(),
         };
         Ok((self.on_host_key)(info).await)
     }

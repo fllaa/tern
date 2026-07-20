@@ -29,6 +29,8 @@ tern-term-stream.workspace = true
 tokio.workspace = true
 bytes.workspace = true
 tern-core-ssh.workspace = true
+tern-core-store.workspace = true
+tern-core-vault.workspace = true
 
 [lints]
 workspace = true

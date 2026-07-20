@@ -7,6 +7,7 @@
 //! instead of propagating backpressure.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -16,8 +17,10 @@ use tauri::State;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tern_core_pty::{LocalPty, PtyConfig, PtyControl};
 use tern_core_ssh::{
-    AuthMethod, HostKeyCallback, SessionConfig, ShellControl, SshSession, accept_any_host_key,
+    AuthMethod, HostKeyCallback, HostKeyVerdict, KnownHostsFile, SessionConfig, ShellControl,
+    SshSession, accept_any_host_key,
 };
+use tern_core_store::Store;
 use tern_proto::{
     AuthMethodDto, AutoBenchCfg, BenchReport, OpenSessionReq, ResizeReq, SessionEvent, SessionId,
     StreamStatsDto, Target,
@@ -39,18 +42,45 @@ struct LiveSession {
     stats: Arc<StreamStats>,
     stats_epoch: std::sync::Mutex<Instant>,
     paused_since: std::sync::Mutex<Option<Instant>>,
-    /// Keeps the russh handle (and thus the connection) alive.
-    _ssh: Option<SshSession>,
+    /// Keeps the russh handle (and thus the connection) alive. Shared with the
+    /// output pump, which probes it to tell a dropped transport from a
+    /// finished shell.
+    _ssh: Option<Arc<SshSession>>,
 }
 
-#[derive(Default)]
 pub struct AppState {
     sessions: Mutex<HashMap<String, Arc<LiveSession>>>,
     pending_host_keys: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     next_id: AtomicU64,
+    store: Store,
+    /// Tern's own `known_hosts`. Never `~/.ssh/known_hosts` (ADR-0013).
+    known_hosts_path: PathBuf,
 }
 
 impl AppState {
+    /// Built in Tauri's `setup` hook rather than derived, because the paths
+    /// come from the app's path resolver. Keeping resolution out of
+    /// `core-store` is what lets that crate stay `tauri`-free and makes its
+    /// in-memory test constructor equivalent.
+    pub fn new(store: Store, known_hosts_path: PathBuf) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            pending_host_keys: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU64::new(0),
+            store,
+            known_hosts_path,
+        }
+    }
+
+    /// A cheap clone — `Store` is an `Arc` inside.
+    pub fn store(&self) -> Store {
+        self.store.clone()
+    }
+
+    pub fn known_hosts_path(&self) -> PathBuf {
+        self.known_hosts_path.clone()
+    }
+
     async fn session(&self, id: &str) -> Result<Arc<LiveSession>, String> {
         self.sessions
             .lock()
@@ -103,31 +133,106 @@ fn spawn_data_path(
     (in_tx, pause_tx)
 }
 
-/// TOFU flow: emit a `HostKeyPrompt` event and block the connect until the
-/// webview answers via `approve_host_key` (or auto-trust for rig/bench runs).
+/// Host-key trust: consult Tern's `known_hosts`, then TOFU only for a genuinely
+/// unknown key.
+///
+/// Four outcomes, and keeping them distinct is the whole point:
+///
+/// * `Trusted`  — connect silently. The common case; a client that prompts
+///   every time trains users to accept without reading.
+/// * `Unknown`  — first contact. Emit `HostKeyPrompt` and block until the
+///   webview answers; on accept, record the key.
+/// * `Changed`  — refuse, and emit `HostKeyChanged` carrying both fingerprints
+///   so the UI can show expected vs offered. Never an "accept?" prompt.
+/// * `Revoked`  — refuse. The key is on file as `@revoked`.
+///
+/// The callback signature returns a bare bool, so the *reason* for a refusal
+/// cannot travel through the return value — hence emitting the detail on the
+/// events channel just before returning false.
 fn host_key_prompt(
     insecure_accept: bool,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     events: Channel<SessionEvent>,
     session_id: String,
+    known_hosts_path: PathBuf,
+    hash_new_entries: bool,
 ) -> HostKeyCallback {
     if insecure_accept {
+        // Rig and benchmark runs only; the product UI never sets this.
         return accept_any_host_key();
     }
     Arc::new(move |info| {
         let pending = Arc::clone(&pending);
         let ev = events.clone();
         let sid = session_id.clone();
+        let path = known_hosts_path.clone();
         Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            pending.lock().await.insert(sid, tx);
-            let _ = ev.send(SessionEvent::HostKeyPrompt {
-                host: info.host,
-                port: info.port,
-                algorithm: info.algorithm,
-                fingerprint_sha256: info.fingerprint_sha256,
-            });
-            rx.await.unwrap_or(false)
+            let file = KnownHostsFile::at(&path);
+            let verdict = match file.verify(&info.host, info.port, &info.public_key) {
+                Ok(v) => v,
+                Err(e) => {
+                    // An unreadable known_hosts must not silently downgrade to
+                    // "trust anything".
+                    let _ = ev.send(SessionEvent::Error {
+                        message: format!("could not read known_hosts: {e}"),
+                    });
+                    return false;
+                }
+            };
+
+            match verdict {
+                HostKeyVerdict::Trusted => true,
+                HostKeyVerdict::Revoked { line } => {
+                    let _ = ev.send(SessionEvent::HostKeyRevoked {
+                        host: info.host.clone(),
+                        port: info.port,
+                        known_hosts_path: path.display().to_string(),
+                        known_hosts_line: line,
+                    });
+                    false
+                }
+                HostKeyVerdict::Changed {
+                    line,
+                    recorded_algorithm,
+                    recorded_fingerprint,
+                } => {
+                    let _ = ev.send(SessionEvent::HostKeyChanged {
+                        host: info.host.clone(),
+                        port: info.port,
+                        algorithm: recorded_algorithm,
+                        recorded_fingerprint,
+                        presented_fingerprint: info.fingerprint_sha256.clone(),
+                        known_hosts_path: path.display().to_string(),
+                        known_hosts_line: line,
+                    });
+                    false
+                }
+                HostKeyVerdict::Unknown => {
+                    let (tx, rx) = oneshot::channel();
+                    pending.lock().await.insert(sid, tx);
+                    let _ = ev.send(SessionEvent::HostKeyPrompt {
+                        host: info.host.clone(),
+                        port: info.port,
+                        algorithm: info.algorithm.clone(),
+                        fingerprint_sha256: info.fingerprint_sha256.clone(),
+                    });
+                    // A dropped sender (webview closed mid-prompt) resolves to
+                    // "no" rather than trusting by default.
+                    let accepted = rx.await.unwrap_or(false);
+                    if accepted
+                        && let Err(e) =
+                            file.learn(&info.host, info.port, &info.public_key, hash_new_entries)
+                    {
+                        // Trust was granted for this session; failing to
+                        // persist it means the next connect asks again, which
+                        // is the safe direction to fail.
+                        let _ = ev.send(SessionEvent::Error {
+                            message: format!("could not record host key: {e}"),
+                        });
+                    }
+                    accepted
+                }
+            }
         })
     })
 }
@@ -143,6 +248,113 @@ fn coalescer_cfg(req: &OpenSessionReq) -> CoalescerConfig {
     }
 }
 
+/// Connect an SSH target and wire its output into an already-spawned data path.
+///
+/// Shared by the ad-hoc `Ssh` target and the stored `SavedHost` one, which
+/// differ only in where the config came from.
+#[allow(clippy::too_many_arguments)] // wiring seam; each argument is distinct state
+async fn connect_ssh(
+    state: &State<'_, AppState>,
+    id: &str,
+    ssh_cfg: SessionConfig,
+    insecure_accept: bool,
+    req: &OpenSessionReq,
+    events: &Channel<SessionEvent>,
+    in_tx: mpsc::Sender<Bytes>,
+    desktop_pause: watch::Sender<bool>,
+    stream_stats: Arc<StreamStats>,
+    host_id: Option<i64>,
+) -> Result<LiveSession, String> {
+    let hash_new = {
+        let store = state.store();
+        tauri::async_runtime::spawn_blocking(move || {
+            store
+                .settings()
+                .get_or(tern_core_store::KEY_HASH_KNOWN_HOSTS, false)
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
+    };
+
+    let on_host_key = host_key_prompt(
+        insecure_accept,
+        Arc::clone(&state.pending_host_keys),
+        events.clone(),
+        id.to_string(),
+        state.known_hosts_path(),
+        hash_new,
+    );
+
+    let session = SshSession::connect(ssh_cfg, on_host_key)
+        .await
+        .map_err(|e| e.to_string())?;
+    let shell = session
+        .open_shell(req.cols, req.rows)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (mut out, control) = shell.split();
+
+    // Only a successful connect counts — a failed attempt should not reorder
+    // the recent-hosts list.
+    if let Some(host_id) = host_id {
+        let store = state.store();
+        let at = now_unix();
+        drop(tauri::async_runtime::spawn_blocking(move || {
+            let _ = store.hosts().record_connection(host_id, at);
+        }));
+    }
+
+    // Shared rather than moved: the pump needs to ask the session whether the
+    // transport is still up, and `LiveSession` needs to hold it to keep the
+    // connection alive.
+    let session = Arc::new(session);
+    let probe = Arc::clone(&session);
+
+    let ev = events.clone();
+    tokio::spawn(async move {
+        while let Some(chunk) = out.recv().await {
+            if in_tx.send(chunk).await.is_err() {
+                break;
+            }
+        }
+        // `recv()` returning None means *either* the remote shell exited or
+        // the transport died, and the exit status alone cannot tell them
+        // apart. Sending Exited unconditionally — as this did before — reported
+        // every dropped connection as a clean exit with code null, which is
+        // exactly why Disconnected was defined but never constructed and why
+        // reconnect had nothing to trigger on.
+        match out.exit_status().await {
+            Some(code) => {
+                let _ = ev.send(SessionEvent::Exited { code: Some(code) });
+            }
+            None if probe.is_closed() => {
+                let _ = ev.send(SessionEvent::Disconnected {
+                    reason: "connection lost".into(),
+                });
+            }
+            None => {
+                let _ = ev.send(SessionEvent::Exited { code: None });
+            }
+        }
+    });
+
+    Ok(LiveSession {
+        control: Control::Ssh(control),
+        desktop_pause,
+        stats: stream_stats,
+        stats_epoch: std::sync::Mutex::new(Instant::now()),
+        paused_since: std::sync::Mutex::new(None),
+        _ssh: Some(session),
+    })
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
 #[tauri::command]
 pub async fn open_session(
     state: State<'_, AppState>,
@@ -156,7 +368,7 @@ pub async fn open_session(
     let (in_tx, desktop_pause) = spawn_data_path(frame_cfg, Arc::clone(&stream_stats), data);
 
     let live = match req.target {
-        Target::Ssh(target) => {
+        Target::Ssh(ref target) => {
             let mut ssh_cfg = SessionConfig::new(
                 target.host.clone(),
                 target.username.clone(),
@@ -166,44 +378,49 @@ pub async fn open_session(
             if let Some(w) = req.window_size {
                 ssh_cfg.window_size = w;
             }
-
-            let on_host_key = host_key_prompt(
-                target.insecure_accept_host_key,
-                Arc::clone(&state.pending_host_keys),
-                events.clone(),
-                id.clone(),
-            );
-
-            let session = SshSession::connect(ssh_cfg, on_host_key)
-                .await
-                .map_err(|e| e.to_string())?;
-            let shell = session
-                .open_shell(req.cols, req.rows)
-                .await
-                .map_err(|e| e.to_string())?;
-            let (mut out, control) = shell.split();
-
-            let ev = events.clone();
-            tokio::spawn(async move {
-                while let Some(chunk) = out.recv().await {
-                    if in_tx.send(chunk).await.is_err() {
-                        break;
-                    }
-                }
-                let code = out.exit_status().await;
-                let _ = ev.send(SessionEvent::Exited { code });
-            });
-
-            LiveSession {
-                control: Control::Ssh(control),
+            let insecure = target.insecure_accept_host_key;
+            connect_ssh(
+                &state,
+                &id,
+                ssh_cfg,
+                insecure,
+                &req,
+                &events,
+                in_tx,
                 desktop_pause,
-                stats: stream_stats,
-                stats_epoch: std::sync::Mutex::new(Instant::now()),
-                paused_since: std::sync::Mutex::new(None),
-                _ssh: Some(session),
-            }
+                stream_stats,
+                None,
+            )
+            .await?
         }
-        Target::LocalPty(target) => {
+        Target::SavedHost { host_id } => {
+            // The product path. No credential crosses the IPC boundary: the
+            // record names a keyring account and we resolve it here.
+            let store = state.store();
+            let host = tauri::async_runtime::spawn_blocking(move || store.hosts().get(host_id))
+                .await
+                .map_err(|e| format!("store task failed: {e}"))?
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("no such host {host_id}"))?;
+
+            let auth = crate::auth::auth_for_host(&host);
+            let ssh_cfg = crate::session_cfg::for_host(&host, auth, &req);
+            connect_ssh(
+                &state,
+                &id,
+                ssh_cfg,
+                false,
+                &req,
+                &events,
+                in_tx,
+                desktop_pause,
+                stream_stats,
+                Some(host_id),
+            )
+            .await?
+        }
+        Target::LocalPty(ref target) => {
+            let target = target.clone();
             let pty_cfg = PtyConfig {
                 program: target.program,
                 args: target.args,
@@ -221,6 +438,9 @@ pub async fn open_session(
                         break;
                     }
                 }
+                // A local child process that stops producing output has
+                // exited — there is no transport to lose, so unlike SSH there
+                // is nothing to disambiguate here.
                 let code = out.exit_code().await;
                 let _ = ev.send(SessionEvent::Exited { code });
             });
