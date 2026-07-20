@@ -22,8 +22,7 @@ export interface ChangedKey {
   known_hosts_line: number;
 }
 
-const overlay =
-  "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4";
+const overlay = "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4";
 const panel =
   "w-full max-w-lg rounded-lg border border-neutral-700 bg-neutral-900 p-5 text-sm text-neutral-100 shadow-xl";
 const mono = "font-mono text-xs break-all";
@@ -58,12 +57,14 @@ export function FirstContactDialog({
         </dl>
         <div className="flex justify-end gap-2">
           <button
+            type="button"
             className="rounded px-3 py-1.5 text-neutral-300 hover:bg-neutral-800"
             onClick={() => onDecide(false)}
           >
             Cancel
           </button>
           <button
+            type="button"
             className="rounded bg-neutral-200 px-3 py-1.5 font-medium text-neutral-900 hover:bg-white"
             onClick={() => onDecide(true)}
           >
@@ -95,10 +96,9 @@ export function ChangedKeyDialog({
           <span className="text-neutral-100">
             {detail.host}:{detail.port}
           </span>{" "}
-          does not match the one on record. This happens when a server is
-          rebuilt or reinstalled — and it is also what a machine-in-the-middle
-          attack looks like. Confirm with whoever runs the host before
-          continuing.
+          does not match the one on record. This happens when a server is rebuilt or
+          reinstalled — and it is also what a machine-in-the-middle attack looks like.
+          Confirm with whoever runs the host before continuing.
         </p>
         <dl className="mb-4 space-y-1 rounded bg-neutral-950 p-3">
           <div className="flex gap-2">
@@ -107,9 +107,7 @@ export function ChangedKeyDialog({
           </div>
           <div className="flex gap-2">
             <dt className="w-24 shrink-0 text-neutral-500">Offered</dt>
-            <dd className={`${mono} text-red-300`}>
-              {detail.presented_fingerprint}
-            </dd>
+            <dd className={`${mono} text-red-300`}>{detail.presented_fingerprint}</dd>
           </div>
           <div className="flex gap-2">
             <dt className="w-24 shrink-0 text-neutral-500">Recorded at</dt>
@@ -122,12 +120,14 @@ export function ChangedKeyDialog({
             act; the next connect then presents as ordinary first contact. */}
         <div className="flex justify-end gap-2">
           <button
+            type="button"
             className="rounded px-3 py-1.5 text-neutral-300 hover:bg-neutral-800"
             onClick={onDismiss}
           >
             Close
           </button>
           <button
+            type="button"
             className="rounded border border-red-700 px-3 py-1.5 text-red-300 hover:bg-red-950"
             onClick={onForget}
           >

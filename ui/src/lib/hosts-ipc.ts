@@ -107,21 +107,17 @@ export type SecretUpdate =
 export const listHosts = (filter: HostFilter = {}): Promise<Host[]> =>
   invoke("list_hosts", { filter });
 
-export const getHost = (id: number): Promise<Host | null> =>
-  invoke("get_host", { id });
+export const getHost = (id: number): Promise<Host | null> => invoke("get_host", { id });
 
-export const createHost = (
-  host: NewHost,
-  secret?: string,
-): Promise<number> => invoke("create_host", { host, secret: secret ?? null });
+export const createHost = (host: NewHost, secret?: string): Promise<number> =>
+  invoke("create_host", { host, secret: secret ?? null });
 
 export const updateHost = (
   host: Host,
   secret: SecretUpdate = { action: "unchanged" },
 ): Promise<void> => invoke("update_host", { host, secret });
 
-export const deleteHost = (id: number): Promise<void> =>
-  invoke("delete_host", { id });
+export const deleteHost = (id: number): Promise<void> => invoke("delete_host", { id });
 
 export const moveHost = (id: number, folderId: number | null): Promise<void> =>
   invoke("move_host", { id, folderId });
@@ -133,18 +129,14 @@ export const setHostTags = (id: number, tagIds: number[]): Promise<void> =>
 
 export const listFolders = (): Promise<Folder[]> => invoke("list_folders");
 
-export const createFolder = (
-  parentId: number | null,
-  name: string,
-): Promise<number> => invoke("create_folder", { parentId, name });
+export const createFolder = (parentId: number | null, name: string): Promise<number> =>
+  invoke("create_folder", { parentId, name });
 
 export const renameFolder = (id: number, name: string): Promise<void> =>
   invoke("rename_folder", { id, name });
 
-export const moveFolder = (
-  id: number,
-  parentId: number | null,
-): Promise<void> => invoke("move_folder", { id, parentId });
+export const moveFolder = (id: number, parentId: number | null): Promise<void> =>
+  invoke("move_folder", { id, parentId });
 
 export const deleteFolder = (id: number): Promise<void> =>
   invoke("delete_folder", { id });
@@ -156,13 +148,11 @@ export const listTags = (): Promise<Tag[]> => invoke("list_tags");
 export const createTag = (name: string, color?: string): Promise<number> =>
   invoke("create_tag", { name, color: color ?? null });
 
-export const deleteTag = (id: number): Promise<void> =>
-  invoke("delete_tag", { id });
+export const deleteTag = (id: number): Promise<void> => invoke("delete_tag", { id });
 
 // ── known hosts ──────────────────────────────────────────────────────────
 
-export const listKnownHosts = (): Promise<KnownHostEntry[]> =>
-  invoke("list_known_hosts");
+export const listKnownHosts = (): Promise<KnownHostEntry[]> => invoke("list_known_hosts");
 
 /** Forget a host key — the deliberate second step out of a changed-key state. */
 export const removeKnownHost = (host: string, port: number): Promise<number> =>
@@ -170,7 +160,5 @@ export const removeKnownHost = (host: string, port: number): Promise<number> =>
 
 /** Import from another known_hosts file (defaults to ~/.ssh/known_hosts).
  *  The source is opened read-only and never modified. */
-export const importKnownHosts = (
-  source?: string,
-): Promise<KnownHostsImportReport> =>
+export const importKnownHosts = (source?: string): Promise<KnownHostsImportReport> =>
   invoke("import_known_hosts", { source: source ?? null });

@@ -1,7 +1,9 @@
 //! Integration tests against the local sshd rig (`scripts/sshd-rig.sh up`).
 //!
 //! Tests skip (with a message) when the rig isn't running, so `cargo test`
-//! stays green on machines without Docker. CI brings the rig up on Linux.
+//! stays green on machines without Docker. The `integration` CI job brings the
+//! rig up on Linux and runs them for real; the macOS and Windows legs have no
+//! Docker and keep skipping.
 
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;

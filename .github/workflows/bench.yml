@@ -28,16 +28,14 @@ jobs:
           # hardware class, not absolute UX targets.
           TERN_BENCH_CORE_FLOOR: "25"
           TERN_BENCH_HEADLESS_FLOOR: "12"
-        run: |
-          # Contract (Spike 2): scripts/bench-ci.sh brings up the sshd rig, runs
-          # the headless pipeline (russh -> coalescer -> sink, plus the
-          # xterm-headless consumer), enforces thresholds, and writes
-          # bench-results.json. Until Spike 2 lands, this is a no-op.
-          if [ -x scripts/bench-ci.sh ]; then
-            scripts/bench-ci.sh
-          else
-            echo "scripts/bench-ci.sh not implemented yet (Phase 0 Spike 2)"
-          fi
+        # scripts/bench-ci.sh brings up the sshd rig, runs the headless pipeline
+        # (russh -> coalescer -> sink, plus the xterm-headless consumer),
+        # enforces thresholds, and writes bench-results.json.
+        #
+        # Called unconditionally: the old `if [ -x ... ]` guard dated from
+        # before Spike 2 landed and would have turned a missing or
+        # non-executable script into a silent pass.
+        run: scripts/bench-ci.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:

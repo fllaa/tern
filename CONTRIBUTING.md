@@ -18,9 +18,15 @@ the best odds of merging quickly.
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+bun run format          # biome: format + safe lint fixes
+bun run test            # vitest
 bun run --filter @tern/ui build
 cargo deny check        # optional locally; CI runs it
 ```
+
+The Rust integration tests need the sshd rig — `./scripts/sshd-rig.sh up`.
+They skip cleanly without it, so a green `cargo test` on a machine with no
+Docker does *not* mean the integration suite ran.
 
 ## DCO sign-off (required)
 

@@ -22,6 +22,22 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
 
+  ui:
+    name: biome + vitest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bunx biome ci
+      - run: bun run --filter @tern/ui typecheck
+      - run: bun run --filter @tern/ui test
+    # Linux-only on purpose: lint and unit-test results do not vary by OS, and
+    # the 3-OS `test` job already runs the UI build (which includes tsc) on
+    # every platform. This one exists for sub-minute feedback.
+
   test:
     name: clippy + test (${{ matrix.os }})
     strategy:
@@ -59,3 +75,39 @@ jobs:
       - name: Tests (macOS / Windows)
         if: runner.os != 'Linux'
         run: cargo test --workspace --locked
+
+  integration:
+    name: rig integration (ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system deps (Tauri / WebKitGTK 4.1 + keyring backend)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev gnome-keyring dbus
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Build UI (frontendDist must exist for the desktop crate)
+        run: bun run --filter @tern/ui build
+      # Without this the rig is down, require_rig! makes every integration test
+      # skip, and the suite passes while exercising nothing. macOS and Windows
+      # runners have no Docker, so they keep skipping — which is exactly the
+      # property require_rig! exists to preserve.
+      - name: Start sshd rig (OpenSSH + dropbear)
+        run: ./scripts/sshd-rig.sh up
+      - name: Integration tests against the rig
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets --daemonize
+            cargo test --workspace --locked
+          '
+      - name: Rig logs on failure
+        if: failure()
+        run: docker compose -f docker/compose.yml logs --tail=100

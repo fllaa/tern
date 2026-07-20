@@ -9,23 +9,33 @@
 // renderer string that lands in every BenchReport still describes the real
 // product path.
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { TerminalView, type TerminalReady } from "../components/TerminalView";
-import { TermSession, benchAutoDone, type AutoBenchCfg } from "../lib/ipc";
-import { ptySmoke, runSuite, type BenchEnv } from "../lib/bench";
+import { type TerminalReady, TerminalView } from "../components/TerminalView";
+import { type BenchEnv, ptySmoke, runSuite } from "../lib/bench";
+import { type AutoBenchCfg, benchAutoDone, TermSession } from "../lib/ipc";
+
+interface LogLine {
+  id: number;
+  text: string;
+}
 
 export default function BenchApp({ cfg }: { cfg: AutoBenchCfg }) {
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<LogLine[]>([]);
   const [flowLine, setFlowLine] = useState("");
   const sessionRef = useRef<TermSession | null>(null);
   const started = useRef(false);
+  // The list is capped and sliced from the front, so array indices shift as it
+  // fills — a monotonic id keeps React's reconciliation stable.
+  const nextLogId = useRef(0);
 
   const pushLog = useCallback((line: string) => {
     console.log(`[bench] ${line}`);
     void invoke("bench_log", { line }).catch(() => {});
-    setLog((prev) => [...prev.slice(-199), line]);
+    nextLogId.current += 1;
+    const entry = { id: nextLogId.current, text: line };
+    setLog((prev) => [...prev.slice(-199), entry]);
   }, []);
 
   const onTerminalReady = useCallback(
@@ -111,21 +121,15 @@ export default function BenchApp({ cfg }: { cfg: AutoBenchCfg }) {
     <div className="flex h-full flex-col bg-neutral-950 text-neutral-100">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-3 text-sm">
         <span className="font-medium tracking-wide">Tern — benchmark</span>
-        <span className="ml-auto font-mono text-[10px] text-neutral-500">
-          {flowLine}
-        </span>
+        <span className="ml-auto font-mono text-[10px] text-neutral-500">{flowLine}</span>
       </header>
       <main className="min-h-0 flex-1">
-        <TerminalView
-          onReady={onTerminalReady}
-          onInput={onInput}
-          onResize={onResize}
-        />
+        <TerminalView onReady={onTerminalReady} onInput={onInput} onResize={onResize} />
       </main>
       {log.length > 0 && (
         <footer className="max-h-40 shrink-0 overflow-y-auto border-t border-neutral-800 px-3 py-1 font-mono text-[10px] leading-4 text-neutral-400">
-          {log.map((line, i) => (
-            <div key={i}>{line}</div>
+          {log.map((line) => (
+            <div key={line.id}>{line.text}</div>
           ))}
         </footer>
       )}

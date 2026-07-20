@@ -69,10 +69,7 @@ export type SessionEvent =
   | { event: "error"; message: string };
 
 /** Decide whether to trust a first-contact host key. */
-export type HostKeyPrompt = Extract<
-  SessionEvent,
-  { event: "host_key_prompt" }
->;
+export type HostKeyPrompt = Extract<SessionEvent, { event: "host_key_prompt" }>;
 export type HostKeyDecision = (ev: HostKeyPrompt) => Promise<boolean>;
 
 export interface StreamStatsDto {
@@ -186,14 +183,10 @@ export class TermSession {
       if (ev.event === "host_key_prompt") {
         const decide = onHostKey ?? (async () => false);
         void decide(ev)
-          .then((accept) =>
-            invoke("approve_host_key", { id: session.id, accept }),
-          )
+          .then((accept) => invoke("approve_host_key", { id: session.id, accept }))
           // The Rust side is blocked on this answer; a thrown decision must
           // still resolve to a refusal rather than hanging the connect.
-          .catch(() =>
-            invoke("approve_host_key", { id: session.id, accept: false }),
-          )
+          .catch(() => invoke("approve_host_key", { id: session.id, accept: false }))
           .catch(() => {});
       }
       session.onEvent?.(ev);

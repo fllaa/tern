@@ -6,24 +6,23 @@
 // keyring auth, and host-key trust can be exercised end to end first.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import { TerminalView, type TerminalReady } from "./components/TerminalView";
 import {
+  type ChangedKey,
   ChangedKeyDialog,
   FirstContactDialog,
-  type ChangedKey,
 } from "./components/HostKeyDialog";
-import { useSessionStore } from "./store/session";
-import { TermSession, type HostKeyPrompt } from "./lib/ipc";
+import { type TerminalReady, TerminalView } from "./components/TerminalView";
 import {
+  type AuthKind,
   createHost,
   deleteHost,
+  type Host,
   importKnownHosts,
   listHosts,
   removeKnownHost,
-  type AuthKind,
-  type Host,
 } from "./lib/hosts-ipc";
+import { type HostKeyPrompt, TermSession } from "./lib/ipc";
+import { useSessionStore } from "./store/session";
 
 interface Draft {
   name: string;
@@ -201,6 +200,7 @@ export default function App() {
         <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
           <span className="text-sm font-medium tracking-wide">Tern</span>
           <button
+            type="button"
             className={`${btn} ml-auto`}
             onClick={() => setDraft({ ...EMPTY_DRAFT })}
           >
@@ -216,8 +216,7 @@ export default function App() {
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {hosts.length === 0 && (
             <li className="px-1 py-3 text-xs text-neutral-500">
-              No hosts yet. Add one, or import your{" "}
-              <code>~/.ssh/known_hosts</code> below.
+              No hosts yet. Add one, or import your <code>~/.ssh/known_hosts</code> below.
             </li>
           )}
           {hosts.map((h) => (
@@ -228,6 +227,7 @@ export default function App() {
                 }`}
               >
                 <button
+                  type="button"
                   className="min-w-0 flex-1 text-left"
                   onDoubleClick={() => void connect(h)}
                   onClick={() => void connect(h)}
@@ -242,6 +242,7 @@ export default function App() {
                   </div>
                 </button>
                 <button
+                  type="button"
                   className="hidden text-neutral-500 hover:text-red-400 group-hover:block"
                   title="Delete host"
                   onClick={() => {
@@ -255,6 +256,7 @@ export default function App() {
           ))}
         </ul>
         <button
+          type="button"
           className={`${btn} m-2`}
           onClick={() => {
             void importKnownHosts()
@@ -277,6 +279,7 @@ export default function App() {
             {activeHost ? activeHost.name : "no session"} · {status}
           </span>
           <button
+            type="button"
             className={`${btn} ml-auto`}
             disabled={status !== "connected"}
             onClick={() => void disconnect()}
@@ -285,11 +288,7 @@ export default function App() {
           </button>
         </header>
         <main className="min-h-0 flex-1">
-          <TerminalView
-            onReady={onTerminalReady}
-            onInput={onInput}
-            onResize={onResize}
-          />
+          <TerminalView onReady={onTerminalReady} onInput={onInput} onResize={onResize} />
         </main>
         {notice && (
           <footer className="shrink-0 border-t border-neutral-800 px-3 py-1 font-mono text-[10px] text-neutral-400">
@@ -314,9 +313,7 @@ export default function App() {
                   className={`${field} min-w-0 flex-1`}
                   placeholder="hostname"
                   value={draft.hostname}
-                  onChange={(e) =>
-                    setDraft({ ...draft, hostname: e.target.value })
-                  }
+                  onChange={(e) => setDraft({ ...draft, hostname: e.target.value })}
                 />
                 <input
                   className={`${field} w-16`}
@@ -329,16 +326,12 @@ export default function App() {
                 className={`${field} w-full`}
                 placeholder="username"
                 value={draft.username}
-                onChange={(e) =>
-                  setDraft({ ...draft, username: e.target.value })
-                }
+                onChange={(e) => setDraft({ ...draft, username: e.target.value })}
               />
               <select
                 className={`${field} w-full`}
                 value={draft.auth}
-                onChange={(e) =>
-                  setDraft({ ...draft, auth: e.target.value as AuthKind })
-                }
+                onChange={(e) => setDraft({ ...draft, auth: e.target.value as AuthKind })}
               >
                 <option value="agent">ssh-agent</option>
                 <option value="key_file">private key</option>
@@ -349,22 +342,16 @@ export default function App() {
                   className={`${field} w-full`}
                   placeholder="path to private key"
                   value={draft.keyPath}
-                  onChange={(e) =>
-                    setDraft({ ...draft, keyPath: e.target.value })
-                  }
+                  onChange={(e) => setDraft({ ...draft, keyPath: e.target.value })}
                 />
               )}
               {draft.auth !== "agent" && (
                 <input
                   className={`${field} w-full`}
                   type="password"
-                  placeholder={
-                    draft.auth === "password" ? "password" : "key passphrase"
-                  }
+                  placeholder={draft.auth === "password" ? "password" : "key passphrase"}
                   value={draft.secret}
-                  onChange={(e) =>
-                    setDraft({ ...draft, secret: e.target.value })
-                  }
+                  onChange={(e) => setDraft({ ...draft, secret: e.target.value })}
                 />
               )}
               <p className="text-[10px] text-neutral-500">
@@ -372,10 +359,11 @@ export default function App() {
               </p>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button className={btn} onClick={() => setDraft(null)}>
+              <button type="button" className={btn} onClick={() => setDraft(null)}>
                 cancel
               </button>
               <button
+                type="button"
                 className={btn}
                 disabled={!draft.hostname}
                 onClick={() => void saveDraft()}
@@ -387,9 +375,7 @@ export default function App() {
         </div>
       )}
 
-      {prompt && (
-        <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />
-      )}
+      {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
       {changed && (
         <ChangedKeyDialog
           detail={changed}
