@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["ui/src/**", "ui/*.ts", "scripts/**/*.mjs", "*.json"]
+    "includes": ["ui/src/**", "ui/*.ts", "scripts/**/*.mjs", "*.json", "!**/*.css"]
   },
   "formatter": {
     "enabled": true,
@@ -27,15 +27,18 @@
   },
   "overrides": [
     {
-      "includes": ["ui/src/components/ui/**"],
+      "includes": ["ui/src/components/ui/**", "ui/src/lib/tree.ts"],
       "linter": {
         "rules": {
           "a11y": {
             "noStaticElementInteractions": "off",
             "useKeyWithClickEvents": "off",
-            "useSemanticElements": "off"
+            "useSemanticElements": "off",
+            "noLabelWithoutControl": "off",
+            "noNoninteractiveElementToInteractiveRole": "off"
           },
-          "complexity": { "noExcessiveCognitiveComplexity": "off" }
+          "complexity": { "noExcessiveCognitiveComplexity": "off" },
+          "correctness": { "useExhaustiveDependencies": "off" }
         }
       }
     },

@@ -1,3 +1,15 @@
+// Fonts are bundled, not fetched. The Tauri CSP is `font-src 'self' data:`,
+// so a Google Fonts link would silently fail to load and the terminal would
+// fall back to a font with no box-drawing glyphs. @fontsource ships woff2 that
+// Vite rewrites to hashed same-origin assets, satisfying 'self' with no CSP
+// change at all.
+import "@fontsource/space-grotesk/500.css";
+import "@fontsource/space-grotesk/700.css";
+import "@fontsource/dm-sans/400.css";
+import "@fontsource/dm-sans/500.css";
+import "@fontsource/dm-sans/700.css";
+import "@fontsource-variable/jetbrains-mono";
+
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import BenchApp from "./bench/BenchApp";
