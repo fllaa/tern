@@ -1,0 +1,28 @@
+[package]
+name = "tern"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Tern — open, lightweight SSH client"
+
+[lib]
+name = "tern_lib"
+# staticlib/cdylib keep the Tauri mobile door open.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# No "devtools" feature: debug builds get the inspector automatically; the
+# feature would ship it in release builds.
+tauri = { version = "2", features = [] }
+tern-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

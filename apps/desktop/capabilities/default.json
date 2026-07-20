@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline capability for the Tern main window. Grow this only when a feature hits a concrete permission error — never pre-emptively.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
