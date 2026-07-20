@@ -94,8 +94,8 @@ Kill the unknowns while the codebase is still 500 lines.
 - Host manager: CRUD, folders/tags, search, quick-connect (SQLite, ADR-0012).
 - Auth: password, publickey (ed25519/ECDSA/RSA), agent; per-host overrides.
 - Host-key trust: own known_hosts, TOFU, changed-key refusal (ADR-0013).
-- **`~/.ssh/config` import** — disproportionate adoption lever, do it early. OpenSSH and PuTTY key import.
-- Terminal UX: tabs, themes, font config, scrollback + search, copy-on-select, paste protection.
+- **`~/.ssh/config` import** (ADR-0015) — disproportionate adoption lever, do it early. OpenSSH and PuTTY key import.
+- Terminal UX: tabs (ADR-0016), themes, font config, scrollback + search, copy-on-select, paste protection.
 - Reconnect logic, keepalive, clear connection-state UI.
 
 **Deferred out of Phase 1:** keyboard-interactive auth (the cost is the async

@@ -17,6 +17,12 @@ portable in Phase 1. Vite is held at **7.x** (not 8/Rolldown) — Phase 0 is
 about de-risking the terminal path, not early-adopting bundlers; the upgrade
 later is a one-line bump.
 
+## Update (Phase 1)
+
+The component layer is settled separately in ADR-0014: LiltUI on Base UI,
+vendored copy-in. Frontend lint/format/test tooling is Biome + Vitest, added in
+Phase 1 — CONTRIBUTING lists the commands.
+
 ## Consequences
 
 - Good: fastest path through Phases 1–3 (the SFTP file manager especially);
