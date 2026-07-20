@@ -138,6 +138,9 @@ export default function App() {
             setPrompt(ev);
           }),
         onEvent: (ev) => {
+          // Non-fatal, so it gets the notice bar rather than the error state —
+          // the session is still connecting, and usually still connects.
+          if (ev.event === "warning") setNotice(ev.message);
           if (ev.event === "host_key_changed") setChanged(ev);
           if (ev.event === "host_key_revoked") {
             setNotice(

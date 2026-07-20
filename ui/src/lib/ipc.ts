@@ -66,7 +66,11 @@ export type SessionEvent =
   // Transport died. Distinct from "exited", which is a shell ending normally.
   | { event: "disconnected"; reason: string }
   | { event: "exited"; code: number | null }
-  | { event: "error"; message: string };
+  | { event: "error"; message: string }
+  // Non-fatal. Emitted when the connection went ahead but something the user
+  // should know about did not go to plan — a saved credential that could not
+  // be read, for instance. Never terminal; "error" is the terminal one.
+  | { event: "warning"; message: string };
 
 /** Decide whether to trust a first-contact host key. */
 export type HostKeyPrompt = Extract<SessionEvent, { event: "host_key_prompt" }>;

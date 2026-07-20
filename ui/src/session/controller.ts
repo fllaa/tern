@@ -93,6 +93,8 @@ function handleEvent(tabId: TabId, ev: SessionEvent): void {
       store.setConn(tabId, "error", `host key revoked for ${ev.host}:${ev.port}`);
       break;
     default:
+      // `warning` deliberately lands here: it is non-fatal and must not touch
+      // the connection state. The caller's onEvent surfaces it.
       break;
   }
 }
