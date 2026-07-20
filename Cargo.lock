@@ -5089,10 +5089,14 @@ version = "0.1.0"
 name = "tern-core-ssh"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "bytes",
  "crossterm",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
  "rpassword",
  "russh",
+ "sha1",
  "tern-term-stream",
  "thiserror 2.0.19",
  "tokio",
