@@ -2,6 +2,8 @@
 
 **The open, lightweight Termius — with sync you own.**
 
+[![CI](https://github.com/fllaa/tern/actions/workflows/ci.yml/badge.svg)](https://github.com/fllaa/tern/actions/workflows/ci.yml)
+
 Cross-platform SSH client for macOS, Windows, and Linux. Rust core, Tauri 2 shell,
 xterm.js frontend. Apache-2.0.
 
