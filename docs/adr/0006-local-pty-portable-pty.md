@@ -24,3 +24,11 @@ child process).
   acceptable for the expected tab counts.
 - Revisit when: thread-per-tab overhead shows up in profiles, or portable-pty
   maintenance stalls.
+
+## Phase 0 spike finding (2026-07-20)
+
+`ConPTY` withholds child output until the hosting terminal answers its Device
+Status Report handshake (`ESC[6n` → reply `ESC[row;colR`). xterm.js answers
+automatically, so the app path just works once input is wired; anything
+consuming a `ConPTY` without a terminal (tests, future headless features) must
+reply itself or reads hang. Smoke tests encode this; unix legs unaffected.

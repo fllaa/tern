@@ -86,7 +86,36 @@ async fn windows_conpty_echo() {
         ..PtyConfig::login_shell(80, 24)
     };
     let mut pty = LocalPty::spawn(&cfg).expect("spawn cmd (ConPTY)");
-    read_until(&mut pty, "hello-pty-ok", Duration::from_secs(20)).await;
+
+    // ConPTY handshake (Phase 0 finding): before releasing any child output,
+    // ConPTY sends a Device Status Report (ESC[6n) and waits for the hosting
+    // terminal to answer with a cursor position (ESC[row;colR). xterm.js does
+    // this automatically in the app; a headless consumer must reply itself.
+    let mut acc = String::new();
+    let mut answered_dsr = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timeout waiting for hello-pty-ok; got so far: {acc:?}"
+        );
+        let Ok(chunk) = tokio::time::timeout(remaining, pty.recv()).await else {
+            panic!("timeout waiting for hello-pty-ok; got so far: {acc:?}")
+        };
+        let Some(bytes) = chunk else {
+            panic!("pty closed early; got so far: {acc:?}")
+        };
+        acc.push_str(&String::from_utf8_lossy(&bytes));
+        if !answered_dsr && acc.contains("\u{1b}[6n") {
+            answered_dsr = true;
+            pty.write(b"\x1b[1;1R".to_vec()).await.expect("answer DSR");
+        }
+        if acc.contains("hello-pty-ok") {
+            break;
+        }
+    }
+
     let code = pty.wait_exit().await;
     assert_eq!(code, Some(0), "cmd /c echo should exit 0");
 }
