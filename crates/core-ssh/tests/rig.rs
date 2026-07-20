@@ -41,10 +41,7 @@ macro_rules! require_rig {
 }
 
 fn key_auth() -> AuthMethod {
-    AuthMethod::KeyFile {
-        path: rig_key(),
-        passphrase: None,
-    }
+    AuthMethod::key_file(rig_key(), None)
 }
 
 async fn connect(port: u16, auth: AuthMethod) -> SshSession {
@@ -84,7 +81,7 @@ async fn read_until(shell: &mut ShellChannel, needle: &str, timeout: Duration) -
 #[tokio::test]
 async fn password_auth_and_echo() {
     require_rig!(OPENSSH_PORT);
-    let session = connect(OPENSSH_PORT, AuthMethod::Password("tern123".into())).await;
+    let session = connect(OPENSSH_PORT, AuthMethod::password("tern123")).await;
     let mut shell = session.open_shell(80, 24).await.expect("open shell");
     shell.write("echo tern-$((2+3))\n").await.expect("write");
     read_until(&mut shell, "tern-5", Duration::from_secs(10)).await;
@@ -107,7 +104,7 @@ async fn wrong_password_fails() {
     require_rig!(OPENSSH_PORT);
     let cfg = SessionConfig {
         port: OPENSSH_PORT,
-        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Password("wrong".into()))
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::password("wrong"))
     };
     let result = SshSession::connect(cfg, accept_any_host_key()).await;
     assert!(result.is_err(), "auth with a wrong password must fail");

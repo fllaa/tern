@@ -1,23 +1,65 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use zeroize::Zeroizing;
+
+/// A credential held in memory. Wiped on drop.
+///
+/// Best-effort by necessity: `russh`'s `authenticate_password` takes an owned
+/// `String` it does not zeroize, and `keyring` hands back a plain `String`.
+/// What this buys is that *our* long-lived copies are wiped and the plaintext
+/// exists for as short a window as possible — the plain `String` is
+/// materialized at the last moment inside `authenticate`.
+pub type Secret = Zeroizing<String>;
+
 /// How to authenticate a session.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written rather than derived, and must stay that way.
+/// `SessionConfig` derives `Debug` and holds one of these, so a single
+/// `tracing::debug!("{cfg:?}")` — exactly the line someone adds while chasing
+/// a connect bug — would otherwise print the user's password into a log.
+#[derive(Clone)]
 pub enum AuthMethod {
     /// Password authentication.
-    ///
-    /// NOTE: plain `String` for the Phase 0 spike; the vault's zeroizing secret
-    /// type replaces this in Phase 5.
-    Password(String),
-    /// A private key file on disk (OpenSSH/PEM formats via russh).
+    Password(Secret),
+    /// A private key file on disk (OpenSSH/PEM/PPK formats via russh).
     KeyFile {
         path: PathBuf,
-        passphrase: Option<String>,
+        passphrase: Option<Secret>,
     },
-    /// The system ssh-agent via `SSH_AUTH_SOCK`.
-    ///
-    /// Windows OpenSSH named pipe / Pageant support is Phase 1 work.
+    /// The system ssh-agent: `SSH_AUTH_SOCK` on unix, the OpenSSH named pipe
+    /// or Pageant on Windows.
     Agent,
+}
+
+impl AuthMethod {
+    /// Password auth from anything string-like, wrapped so it is wiped on drop.
+    pub fn password(secret: impl Into<String>) -> Self {
+        Self::Password(Zeroizing::new(secret.into()))
+    }
+
+    /// Key-file auth with an optional passphrase.
+    pub fn key_file(path: impl Into<PathBuf>, passphrase: Option<String>) -> Self {
+        Self::KeyFile {
+            path: path.into(),
+            passphrase: passphrase.map(Zeroizing::new),
+        }
+    }
+}
+
+impl fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Password(_) => f.write_str("Password(<redacted>)"),
+            Self::KeyFile { path, passphrase } => f
+                .debug_struct("KeyFile")
+                .field("path", path)
+                .field("passphrase", &passphrase.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            Self::Agent => f.write_str("Agent"),
+        }
+    }
 }
 
 /// Everything needed to establish an SSH session.
@@ -76,5 +118,36 @@ mod tests {
         assert_eq!(cfg.window_size, 512 * 1024);
         assert_eq!(cfg.channel_buffer_size, 16);
         assert!(cfg.keepalive_interval.is_some());
+    }
+
+    /// Guards the hand-written `Debug`. If someone re-derives it, this fails
+    /// rather than a password quietly reaching a log file.
+    #[test]
+    fn debug_never_reveals_a_password() {
+        let auth = AuthMethod::password("hunter2");
+        assert!(!format!("{auth:?}").contains("hunter2"));
+
+        // And through the struct that actually gets logged.
+        let cfg = SessionConfig::new("example.com", "user", auth);
+        assert!(!format!("{cfg:?}").contains("hunter2"));
+        assert!(format!("{cfg:?}").contains("<redacted>"));
+    }
+
+    #[test]
+    fn debug_never_reveals_a_key_passphrase() {
+        let auth = AuthMethod::key_file("/home/me/.ssh/id_ed25519", Some("correct horse".into()));
+        let rendered = format!("{auth:?}");
+        assert!(!rendered.contains("correct horse"));
+        // The path is not a secret and stays visible — it is what makes a
+        // failed key load diagnosable.
+        assert!(rendered.contains("id_ed25519"));
+    }
+
+    #[test]
+    fn debug_distinguishes_a_missing_passphrase_from_a_redacted_one() {
+        let none = AuthMethod::key_file("/k", None);
+        let some = AuthMethod::key_file("/k", Some("x".into()));
+        assert!(format!("{none:?}").contains("None"));
+        assert!(format!("{some:?}").contains("<redacted>"));
     }
 }

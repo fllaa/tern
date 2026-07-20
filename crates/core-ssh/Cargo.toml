@@ -15,6 +15,7 @@ russh = "0.62.2"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

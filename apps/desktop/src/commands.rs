@@ -61,13 +61,15 @@ impl AppState {
     }
 }
 
+/// Map the wire DTO onto the transport's auth type.
+///
+/// This is the boundary where a credential that arrived over IPC becomes a
+/// zeroizing `Secret`. For saved hosts the plaintext should never reach here
+/// at all — the Rust side resolves it from the keyring instead.
 fn auth_from_dto(dto: AuthMethodDto) -> AuthMethod {
     match dto {
-        AuthMethodDto::Password { password } => AuthMethod::Password(password),
-        AuthMethodDto::KeyFile { path, passphrase } => AuthMethod::KeyFile {
-            path: path.into(),
-            passphrase,
-        },
+        AuthMethodDto::Password { password } => AuthMethod::password(password),
+        AuthMethodDto::KeyFile { path, passphrase } => AuthMethod::key_file(path, passphrase),
         AuthMethodDto::Agent => AuthMethod::Agent,
     }
 }

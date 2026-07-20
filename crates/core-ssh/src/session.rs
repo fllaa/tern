@@ -119,6 +119,16 @@ impl SshSession {
         })
     }
 
+    /// Whether the transport is gone.
+    ///
+    /// This is what separates "the remote shell exited" from "the connection
+    /// died": a channel's output ends in both cases, so the exit status alone
+    /// cannot tell them apart. The reconnect supervisor classifies on this.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+
     /// Open an interactive shell with a PTY of the given size.
     pub async fn open_shell(&self, cols: u16, rows: u16) -> Result<ShellChannel, SshError> {
         let channel = self.handle.channel_open_session().await?;
@@ -251,10 +261,15 @@ async fn authenticate(
     let user = cfg.username.clone();
     let result = match &cfg.auth {
         AuthMethod::Password(password) => {
-            handle.authenticate_password(user, password.clone()).await?
+            // russh takes an owned String it does not zeroize, so the plain
+            // copy is created here — at the last possible moment — rather than
+            // being held anywhere with a longer life.
+            handle
+                .authenticate_password(user, password.as_str().to_owned())
+                .await?
         }
         AuthMethod::KeyFile { path, passphrase } => {
-            let key = load_secret_key(path, passphrase.as_deref())
+            let key = load_secret_key(path, passphrase.as_ref().map(|p| p.as_str()))
                 .map_err(|e| SshError::KeyLoad(e.to_string()))?;
             let hash = handle.best_supported_rsa_hash().await?.flatten();
             handle
@@ -268,9 +283,13 @@ async fn authenticate(
             }
             #[cfg(not(unix))]
             {
+                // russh ships both halves already — AgentClient::connect_named_pipe
+                // and ::connect_pageant — so this is wiring, not protocol work.
+                // Landing it in the auth-matrix milestone so it ships together
+                // with the 3-OS verification pass that can actually exercise it.
                 return Err(SshError::Agent(
-                    "ssh-agent auth is unix-only for now; the Windows OpenSSH \
-                     named pipe and Pageant land in Phase 1"
+                    "ssh-agent auth is unix-only in this build; Windows named-pipe \
+                     and Pageant support lands with the Phase 1 auth matrix"
                         .into(),
                 ));
             }
