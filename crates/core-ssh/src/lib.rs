@@ -10,11 +10,13 @@
 
 mod config;
 mod error;
+mod keys;
 mod known_hosts;
 mod session;
 
 pub use config::{AuthMethod, Secret, SessionConfig};
 pub use error::SshError;
+pub use keys::{KeyFormat, KeyInfo, inspect, inspect_str, unlock, unlock_str};
 pub use known_hosts::{
     HostKeyVerdict, ImportReport, KnownHostEntry, KnownHostsError, KnownHostsFile,
 };
