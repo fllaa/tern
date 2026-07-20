@@ -27,5 +27,12 @@ triggered by the Phase 0 benchmark gates (see ADR-0011).
   5–35 MB/s); DOM fallback is slow on huge outputs; renderer lives across the
   IPC boundary.
 - Revisit when: benchmark gates fail (end-to-end < 10 MB/s, echo p95 > 32 ms,
-  reproducible drops, or UI stalls > 500 ms). Spike 2 numbers feed this ADR at
-  Phase 0 exit.
+  reproducible drops, or UI stalls > 500 ms).
+
+## Phase 0 spike results (2026-07-20, xterm 6 + WebGL on Apple Silicon)
+
+91–98 MB/s end-to-end parsed on a 100 MB `cat` (well above the upper end of
+xterm's documented 5–35 MB/s band thanks to large coalesced writes), echo p95
+5–7 ms, max UI stall 56 ms, zero loss everywhere. 72.8 MB/s through
+`@xterm/headless` in CI. No escape-hatch gate tripped — the wgpu path stays
+dormant. Full numbers: `docs/bench/phase0-results.md`.

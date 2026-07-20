@@ -41,7 +41,7 @@ repo/
 |---|---|---|
 | SSH protocol | `russh` | Pure Rust, async, actively maintained. Fallback: `ssh2` (libssh2) if auth edge cases bite — keep the transport behind a trait so this stays possible |
 | SFTP | `russh-sftp` | Rides the same session |
-| Terminal render | xterm.js + WebGL addon | Proven at VS Code/Tabby scale; canvas renderer as fallback |
+| Terminal render | xterm.js + WebGL addon | Proven at VS Code/Tabby scale; DOM renderer as fallback (xterm 6 removed the canvas renderer) |
 | Local PTY | `portable-pty` | Extracted from WezTerm; handles ConPTY on Windows |
 | Serial | `serialport-rs` | Cross-platform, mature |
 | Secrets | `keyring` (OS keychain) + vault crypto (argon2id + XChaCha20-Poly1305), `zeroize` | Never plaintext on disk |
@@ -168,7 +168,7 @@ Scope cuts to resist: bookmarks, folder-sync jobs, cloud-storage backends. All p
 - **Testing:** unit tests in core crates; integration tests against dockerized **OpenSSH and dropbear** (old and embedded servers are where SSH clients actually break); golden-file tests for the vault format; a manual release checklist for the 3-OS × auth-method grid.
 - **Release rhythm:** tagged beta every 2–3 weeks from Phase 1 onward. Early users will find the Windows and Linux quirks you can't.
 - **Perf budgets:** keep the Phase 0 throughput benchmark runnable in CI so regressions are visible.
-- **Known platform pain:** WebKitGTK on Linux is Tauri's weak spot — rendering performance varies and Wayland has quirks. Test on Ubuntu LTS, Fedora, and Arch early; keep the xterm.js canvas renderer as a fallback and document known issues honestly.
+- **Known platform pain:** WebKitGTK on Linux is Tauri's weak spot — rendering performance varies and Wayland has quirks. Test on Ubuntu LTS, Fedora, and Arch early; keep the xterm.js DOM renderer as a fallback (xterm 6 removed the canvas renderer) and document known issues honestly.
 
 ---
 

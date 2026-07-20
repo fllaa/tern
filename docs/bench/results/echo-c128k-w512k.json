@@ -1,0 +1,32 @@
+{
+  "scenario": "echo",
+  "renderer": "webgl",
+  "chunk_max": 131072,
+  "tick_ms": 8,
+  "window_size": 524288,
+  "server": "openssh",
+  "rust": {
+    "bytes_in": 628,
+    "newlines_in": 0,
+    "frames_out": 213,
+    "bytes_out": 628,
+    "max_frame_bytes": 52,
+    "pause_count": 0,
+    "paused_ms": 0,
+    "elapsed_ms": 19742
+  },
+  "js": {
+    "recv_bytes": 628,
+    "recv_frames": 213,
+    "parsed_bytes": 628,
+    "wall_ms": 19740,
+    "max_pending_bytes": 52,
+    "pause_count": 0,
+    "js_newlines": 0,
+    "echo_p50_ms": 5.0,
+    "echo_p95_ms": 7.0,
+    "echo_max_ms": 13.0,
+    "echo_samples": 200,
+    "max_stall_ms": null
+  }
+}

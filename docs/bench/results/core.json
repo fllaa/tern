@@ -1,0 +1,1 @@
+{"results":[{"name":"core_seq2m","bytes":16888954,"newlines":2000003,"wall_ms":401,"mbps":40.14,"complete":true},{"name":"core_cat100mb","bytes":107617073,"newlines":1379709,"wall_ms":807,"mbps":127.03,"complete":true}],"lossless":true,"core_floor_80mbps":true}

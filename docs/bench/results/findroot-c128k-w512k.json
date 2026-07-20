@@ -1,0 +1,32 @@
+{
+  "scenario": "findroot",
+  "renderer": "webgl",
+  "chunk_max": 131072,
+  "tick_ms": 8,
+  "window_size": 524288,
+  "server": "openssh",
+  "rust": {
+    "bytes_in": 564802,
+    "newlines_in": 13950,
+    "frames_out": 8,
+    "bytes_out": 564802,
+    "max_frame_bytes": 131296,
+    "pause_count": 0,
+    "paused_ms": 0,
+    "elapsed_ms": 402
+  },
+  "js": {
+    "recv_bytes": 564802,
+    "recv_frames": 8,
+    "parsed_bytes": 564802,
+    "wall_ms": 64,
+    "max_pending_bytes": 131296,
+    "pause_count": 0,
+    "js_newlines": 13950,
+    "echo_p50_ms": null,
+    "echo_p95_ms": null,
+    "echo_max_ms": null,
+    "echo_samples": null,
+    "max_stall_ms": 20.0
+  }
+}

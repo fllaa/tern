@@ -26,4 +26,12 @@ adopting the fallback is a conscious, ADR-gated change.
   enterprise users are blocked (documented limitation). Windows agent
   (named pipe / Pageant) needs custom wiring in Phase 1.
 - Revisit when: an auth-method gap blocks a meaningful user cohort, or russh
-  maintenance stalls. Spike results feed this ADR at Phase 0 exit.
+  maintenance stalls.
+
+## Phase 0 spike results (2026-07-20, russh 0.62.2)
+
+Interactive shell, PTY resize, config keepalives (2-min idle survived), and
+password/key/agent auth all pass against OpenSSH and dropbear rigs. The
+bounded-buffer backpressure held under a 36M-line `yes` (98 pause cycles,
+zero loss). Core path sustained 127 MB/s (`bench_sink`). Known gaps: agent
+auth is unix-only until Phase 1 (Windows named pipe/Pageant); no GSSAPI.

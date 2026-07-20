@@ -9,7 +9,9 @@ xterm.js frontend. Apache-2.0.
 
 > **Status: pre-alpha.** Tern is a few weeks old. Nothing here is usable yet —
 > right now this repo is scaffolding plus the de-risking spikes for the terminal
-> data path. Watch releases if you want to know when that changes.
+> data path. The Phase 0 throughput/latency numbers live in
+> [docs/bench/phase0-results.md](docs/bench/phase0-results.md).
+> Watch releases if you want to know when that changes.
 
 ## Why
 

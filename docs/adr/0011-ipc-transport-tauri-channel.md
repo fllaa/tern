@@ -31,6 +31,18 @@ pause propagates through russh's window to the remote process.
 - Bad / accepted cost: one fetch round-trip per coalesced frame (the price of
   webview IPC); benchmark thresholds — zero drops, echo p95 < 16 ms,
   ≥ 20 MB/s end-to-end, ≥ 80 MB/s Rust-side — gate this bet.
-- Revisit when: Spike 2 numbers breach the escape-hatch gates (< 10 MB/s,
+- Revisit when: numbers regress through the escape-hatch gates (< 10 MB/s,
   echo p95 > 32 ms, reproducible drops, > 500 ms stalls) ⇒ investigate a wgpu
-  Rust-native terminal. Spike 2 results feed this ADR at Phase 0 exit.
+  Rust-native terminal.
+
+## Phase 0 spike results (2026-07-20)
+
+**The bet holds.** End-to-end: 91–98 MB/s sustained (100 MB `cat`), echo p95
+5–7 ms, zero loss across ~63M lines of adversarial output, UI stalls ≤ 56 ms.
+Backpressure verified live: a 36M-line `yes` drove 98 pause/resume cycles
+through the SSH window with independent Rust/JS byte tallies staying equal.
+Mechanical findings: each ≥1 KiB channel frame costs one ordered fetch
+round-trip, so throughput ≈ frame size ÷ fetch RTT — 128 KiB frames are the
+sweet spot (64 KiB is fine; 256 KiB buys little). One-shot writes flush
+immediately via the coalescer idle fast-path, so the tick never taxes echo.
+Full numbers: `docs/bench/phase0-results.md`.
