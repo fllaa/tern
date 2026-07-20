@@ -203,8 +203,37 @@ export default function App() {
 
   return (
     <div className="h-full bg-[var(--lilt-canvas)] font-sans text-[var(--lilt-text)]">
-      <ResizablePanelGroup orientation="horizontal">
-        <ResizablePanel defaultSize={22} minSize={14} maxSize={40} collapsible>
+      {/*
+        Two v4 gotchas are load-bearing here.
+
+        1. Sizes are unit-sensitive: a bare number is PIXELS, a bare string is a
+           percentage. v3 read numbers as percentages, so the `minSize={14}` /
+           `maxSize={40}` carried over from it silently became a 14px..40px
+           sidebar.
+        2. Panel `defaultSize` is dropped on the first render: the constraint
+           resolver bails out with `defaultSize: undefined` whenever the group
+           measures 0, which it does before layout. The panel then keeps the
+           auto-assigned even split and, once measurement lands, gets clamped —
+           so it renders pinned to `maxSize` no matter what `defaultSize` says.
+           Group-level `defaultLayout` is applied by panel id and does not
+           depend on that first measurement, so it is the one that survives.
+      */}
+      <ResizablePanelGroup
+        orientation="horizontal"
+        defaultLayout={{ sidebar: 22, terminals: 78 }}
+      >
+        {/* Percentage start, pixel bounds: a host list needs a real minimum to
+            show names, and never needs to be half an ultrawide display.
+            `defaultSize` is redundant for the initial layout (see above) but is
+            still what double-clicking the separator resets to, so it stays. */}
+        <ResizablePanel
+          id="sidebar"
+          defaultSize="22"
+          minSize={200}
+          maxSize={420}
+          collapsible
+          collapsedSize={0}
+        >
           <HostSidebar
             hosts={hosts}
             folders={folders}
@@ -239,9 +268,11 @@ export default function App() {
           />
         </ResizablePanel>
 
-        <ResizableHandle />
+        {/* The grip is what makes `collapsible` recoverable: dragged to zero,
+            an invisible separator leaves no clue the sidebar can come back. */}
+        <ResizableHandle withHandle />
 
-        <ResizablePanel defaultSize={78}>
+        <ResizablePanel id="terminals">
           <div className="flex h-full min-w-0 flex-col bg-[var(--lilt-surface)]">
             {order.length > 0 && (
               <SessionTabs onClose={onCloseTab} onNew={() => setAdding(true)} />
