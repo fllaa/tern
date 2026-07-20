@@ -1,191 +1,189 @@
-// Phase 0 spike shell: connect to the rig (or any host), stream through the
-// raw-Channel data path, and run the Spike 2 benchmark suite. Not product UI.
+// M1 product shell: a real host list backed by SQLite, connecting through
+// Target::SavedHost so no credential crosses the IPC boundary.
+//
+// Deliberately plain markup. The LiltUI product shell — sidebar tree, tabs,
+// command palette — lands in the next milestone; this exists so the store,
+// keyring auth, and host-key trust can be exercised end to end first.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { TerminalView, type TerminalReady } from "./components/TerminalView";
-import { useSessionStore } from "./store/session";
-import { invoke } from "@tauri-apps/api/core";
-import {
-  TermSession,
-  benchAuto,
-  benchAutoDone,
-  type OpenSessionReq,
-} from "./lib/ipc";
-import { ptySmoke, runSuite, type BenchEnv } from "./lib/bench";
 
-interface FormState {
-  host: string;
-  port: number;
+import { TerminalView, type TerminalReady } from "./components/TerminalView";
+import {
+  ChangedKeyDialog,
+  FirstContactDialog,
+  type ChangedKey,
+} from "./components/HostKeyDialog";
+import { useSessionStore } from "./store/session";
+import { TermSession, type HostKeyPrompt } from "./lib/ipc";
+import {
+  createHost,
+  deleteHost,
+  importKnownHosts,
+  listHosts,
+  removeKnownHost,
+  type AuthKind,
+  type Host,
+} from "./lib/hosts-ipc";
+
+interface Draft {
+  name: string;
+  hostname: string;
+  port: string;
   username: string;
-  password: string;
+  auth: AuthKind;
   keyPath: string;
-  useKey: boolean;
-  insecure: boolean;
-  localPty: boolean;
+  secret: string;
 }
 
-const RIG: FormState = {
-  host: "127.0.0.1",
-  port: 2222,
-  username: "tern",
-  password: "tern123",
-  keyPath: ".rig/ssh/id_ed25519",
-  useKey: true,
-  insecure: true,
-  localPty: false,
+const EMPTY_DRAFT: Draft = {
+  name: "",
+  hostname: "",
+  port: "22",
+  username: "",
+  auth: "agent",
+  keyPath: "",
+  secret: "",
 };
 
 export default function App() {
   const status = useSessionStore((s) => s.status);
   const setStatus = useSessionStore((s) => s.setStatus);
-  const [form, setForm] = useState<FormState>(RIG);
-  const [log, setLog] = useState<string[]>([]);
-  const [flowLine, setFlowLine] = useState("");
+
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [query, setQuery] = useState("");
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [activeHost, setActiveHost] = useState<Host | null>(null);
+  const [notice, setNotice] = useState("");
+  const [prompt, setPrompt] = useState<HostKeyPrompt | null>(null);
+  const [changed, setChanged] = useState<ChangedKey | null>(null);
+
   const readyRef = useRef<TerminalReady | null>(null);
   const sessionRef = useRef<TermSession | null>(null);
-  const autoStarted = useRef(false);
+  // The prompt is answered from a dialog, so the connect's decision has to
+  // travel back out of React state to the promise `TermSession.open` awaits.
+  const decideRef = useRef<((accept: boolean) => void) | null>(null);
 
-  const pushLog = useCallback((line: string) => {
-    // eslint-disable-next-line no-console
-    console.log(`[bench] ${line}`);
-    void invoke("bench_log", { line }).catch(() => {});
-    setLog((prev) => [...prev.slice(-199), line]);
+  const refresh = useCallback(async (q: string) => {
+    try {
+      setHosts(await listHosts({ query: q || null }));
+    } catch (err) {
+      setNotice(`could not load hosts: ${String(err)}`);
+    }
   }, []);
 
+  useEffect(() => {
+    void refresh(query);
+  }, [query, refresh]);
+
   const connect = useCallback(
-    async (f: FormState, tuning?: Partial<OpenSessionReq>) => {
+    async (host: Host) => {
       const ready = readyRef.current;
-      if (!ready || sessionRef.current) return null;
+      if (!ready || sessionRef.current) return;
       setStatus("connecting");
-      const { term } = ready;
-      const req: OpenSessionReq = {
-        target: f.localPty
-          ? { kind: "local_pty", program: null }
-          : {
-              kind: "ssh",
-              host: f.host,
-              port: f.port,
-              username: f.username,
-              auth: f.useKey
-                ? { method: "key_file", path: f.keyPath, passphrase: null }
-                : { method: "password", password: f.password },
-              insecure_accept_host_key: f.insecure,
-            },
-        cols: term.cols,
-        rows: term.rows,
-        ...tuning,
-      };
+      setNotice("");
       try {
-        const session = await TermSession.open(term, req, (ev) => {
-          if (ev.event === "exited") {
-            setStatus("idle");
-            sessionRef.current = null;
-            pushLog(`session exited (code ${ev.code ?? "?"})`);
-          } else if (ev.event === "error") {
-            setStatus("error");
-            pushLog(`error: ${ev.message}`);
-          }
-        });
+        const session = await TermSession.open(
+          ready.term,
+          {
+            // No credential here — the id is enough, and Rust resolves the
+            // secret from the keyring.
+            target: { kind: "saved_host", host_id: host.id },
+            cols: ready.term.cols,
+            rows: ready.term.rows,
+          },
+          (ev) => {
+            if (ev.event === "exited") {
+              sessionRef.current = null;
+              setActiveHost(null);
+              setStatus("idle");
+              setNotice(`session ended (code ${ev.code ?? "?"})`);
+            } else if (ev.event === "disconnected") {
+              sessionRef.current = null;
+              setActiveHost(null);
+              setStatus("error");
+              setNotice(`disconnected: ${ev.reason}`);
+            } else if (ev.event === "host_key_changed") {
+              setChanged(ev);
+            } else if (ev.event === "host_key_revoked") {
+              setNotice(
+                `host key for ${ev.host}:${ev.port} is revoked (${ev.known_hosts_path}:${ev.known_hosts_line})`,
+              );
+            } else if (ev.event === "error") {
+              setStatus("error");
+              setNotice(ev.message);
+            }
+          },
+          (ev) =>
+            new Promise<boolean>((resolve) => {
+              decideRef.current = resolve;
+              setPrompt(ev);
+            }),
+        );
         sessionRef.current = session;
+        setActiveHost(host);
         setStatus("connected");
-        return session;
+        void refresh(query);
       } catch (err) {
         setStatus("error");
-        pushLog(`connect failed: ${String(err)}`);
-        return null;
+        setNotice(`connect failed: ${String(err)}`);
       }
     },
-    [pushLog, setStatus],
+    [query, refresh, setStatus],
   );
 
   const disconnect = useCallback(async () => {
     const s = sessionRef.current;
     sessionRef.current = null;
+    setActiveHost(null);
     if (s) await s.close().catch(() => {});
     setStatus("idle");
   }, [setStatus]);
 
-  const runBench = useCallback(
-    async (quick: boolean) => {
-      const ready = readyRef.current;
-      const session = sessionRef.current;
-      if (!ready || !session) {
-        pushLog("connect first");
-        return { failed: true };
-      }
-      const env: BenchEnv = {
-        renderer: ready.renderer,
-        chunk_max: 128 * 1024,
-        tick_ms: 8,
-        window_size: 512 * 1024,
-        server: form.port === 2223 ? "dropbear" : "openssh",
-      };
-      return runSuite(session, env, quick, pushLog);
-    },
-    [form.port, pushLog],
-  );
-
-  // Auto-bench mode: TERN_BENCH=auto drives the whole suite headlessly.
-  const onTerminalReady = useCallback(
-    (ready: TerminalReady) => {
-      readyRef.current = ready;
-      if (autoStarted.current) return;
-      autoStarted.current = true;
-      void (async () => {
-        const cfg = await benchAuto().catch(() => null);
-        if (!cfg) return;
-        pushLog(`auto-bench: ${JSON.stringify(cfg)}`);
-        const ptyOk = await ptySmoke(ready.term, pushLog);
-        const session = await connect(
-          {
-            ...RIG,
-            host: cfg.host,
-            port: cfg.port,
-            username: cfg.username,
-            keyPath: cfg.key_path,
-          },
-          {
-            chunk_max: cfg.chunk_max,
-            tick_ms: cfg.tick_ms,
-            window_size: cfg.window_size,
-          },
-        );
-        if (!session) {
-          await benchAutoDone(true);
-          return;
-        }
-        const env: BenchEnv = {
-          renderer: readyRef.current?.renderer ?? "unknown",
-          chunk_max: cfg.chunk_max,
-          tick_ms: cfg.tick_ms,
-          window_size: cfg.window_size,
-          server: cfg.port === 2223 ? "dropbear" : "openssh",
-        };
-        const result = await runSuite(session, env, cfg.quick, pushLog);
-        await benchAutoDone(result.failed || !ptyOk);
-      })();
-    },
-    [connect, pushLog],
-  );
-
-  // Live flow-stats ticker.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const s = sessionRef.current;
-      if (!s) {
-        setFlowLine("");
-        return;
-      }
-      const f = s.flow;
-      setFlowLine(
-        `recv ${(f.recvBytes / 1048576).toFixed(1)}MB in ${f.recvFrames} frames · ` +
-          `pending ${(f.pendingBytes / 1024).toFixed(0)}K (max ${(f.maxPending / 1024).toFixed(0)}K) · ` +
-          `pauses ${f.pauseCount}${f.paused ? " [PAUSED]" : ""}`,
-      );
-    }, 500);
-    return () => clearInterval(timer);
+  const answerPrompt = useCallback((accept: boolean) => {
+    decideRef.current?.(accept);
+    decideRef.current = null;
+    setPrompt(null);
   }, []);
 
+  const forgetChangedKey = useCallback(async () => {
+    if (!changed) return;
+    try {
+      const n = await removeKnownHost(changed.host, changed.port);
+      setNotice(
+        n > 0
+          ? `forgot ${n} key(s) for ${changed.host} — reconnect to verify the new one`
+          : `no stored key found for ${changed.host}`,
+      );
+    } catch (err) {
+      setNotice(`could not forget key: ${String(err)}`);
+    }
+    setChanged(null);
+  }, [changed]);
+
+  const saveDraft = useCallback(async () => {
+    if (!draft) return;
+    try {
+      await createHost(
+        {
+          name: draft.name || draft.hostname,
+          hostname: draft.hostname,
+          port: Number(draft.port) || 22,
+          username: draft.username,
+          auth: draft.auth,
+          keyPath: draft.auth === "key_file" ? draft.keyPath || null : null,
+        },
+        draft.secret || undefined,
+      );
+      setDraft(null);
+      void refresh(query);
+    } catch (err) {
+      setNotice(`could not save host: ${String(err)}`);
+    }
+  }, [draft, query, refresh]);
+
+  const onTerminalReady = useCallback((ready: TerminalReady) => {
+    readyRef.current = ready;
+  }, []);
   const onInput = useCallback((data: string) => {
     void sessionRef.current?.writeText(data);
   }, []);
@@ -193,89 +191,211 @@ export default function App() {
     void sessionRef.current?.resize(cols, rows);
   }, []);
 
-  const field = "w-24 rounded bg-neutral-800 px-2 py-1 text-xs";
+  const field = "rounded bg-neutral-800 px-2 py-1 text-xs outline-none";
   const btn =
     "rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600 disabled:opacity-40";
 
   return (
-    <div className="flex h-full flex-col bg-neutral-950 text-neutral-100">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-3 text-sm">
-        <span className="font-medium tracking-wide">Tern</span>
-        <span className="text-xs text-neutral-400">{status}</span>
+    <div className="flex h-full bg-neutral-950 text-neutral-100">
+      <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-800">
+        <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
+          <span className="text-sm font-medium tracking-wide">Tern</span>
+          <button
+            className={`${btn} ml-auto`}
+            onClick={() => setDraft({ ...EMPTY_DRAFT })}
+          >
+            + host
+          </button>
+        </div>
         <input
-          className={`${field} w-32`}
-          value={form.host}
-          onChange={(e) => setForm({ ...form, host: e.target.value })}
-          placeholder="host"
+          className={`${field} m-2 rounded`}
+          placeholder="search hosts"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
         />
-        <input
-          className={`${field} w-16`}
-          value={form.port}
-          onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 22 })}
-          placeholder="port"
-        />
-        <input
-          className={field}
-          value={form.username}
-          onChange={(e) => setForm({ ...form, username: e.target.value })}
-          placeholder="user"
-        />
-        <label className="flex items-center gap-1 text-xs text-neutral-400">
-          <input
-            type="checkbox"
-            checked={form.useKey}
-            onChange={(e) => setForm({ ...form, useKey: e.target.checked })}
-          />
-          key
-        </label>
-        <label className="flex items-center gap-1 text-xs text-neutral-400">
-          <input
-            type="checkbox"
-            checked={form.localPty}
-            onChange={(e) => setForm({ ...form, localPty: e.target.checked })}
-          />
-          local
-        </label>
-        <button
-          className={btn}
-          disabled={status === "connected" || status === "connecting"}
-          onClick={() => void connect(form)}
-        >
-          connect
-        </button>
-        <button
-          className={btn}
-          disabled={status !== "connected"}
-          onClick={() => void disconnect()}
-        >
-          disconnect
-        </button>
-        <span className="mx-1 text-neutral-700">|</span>
-        <button
-          className={btn}
-          disabled={status !== "connected"}
-          onClick={() => void runBench(true)}
-        >
-          bench quick
-        </button>
-        <button
-          className={btn}
-          disabled={status !== "connected"}
-          onClick={() => void runBench(false)}
-        >
-          bench full
-        </button>
-        <span className="ml-auto font-mono text-[10px] text-neutral-500">{flowLine}</span>
-      </header>
-      <main className="min-h-0 flex-1">
-        <TerminalView onReady={onTerminalReady} onInput={onInput} onResize={onResize} />
-      </main>
-      {log.length > 0 && (
-        <footer className="max-h-40 shrink-0 overflow-y-auto border-t border-neutral-800 px-3 py-1 font-mono text-[10px] leading-4 text-neutral-400">
-          {log.map((line, i) => (
-            <div key={i}>{line}</div>
+        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          {hosts.length === 0 && (
+            <li className="px-1 py-3 text-xs text-neutral-500">
+              No hosts yet. Add one, or import your{" "}
+              <code>~/.ssh/known_hosts</code> below.
+            </li>
+          )}
+          {hosts.map((h) => (
+            <li key={h.id}>
+              <div
+                className={`group flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-neutral-900 ${
+                  activeHost?.id === h.id ? "bg-neutral-900" : ""
+                }`}
+              >
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  onDoubleClick={() => void connect(h)}
+                  onClick={() => void connect(h)}
+                  disabled={status === "connecting" || !!sessionRef.current}
+                >
+                  <div className="truncate text-neutral-100">{h.name}</div>
+                  <div className="truncate text-[10px] text-neutral-500">
+                    {h.username ? `${h.username}@` : ""}
+                    {h.hostname}
+                    {h.port === 22 ? "" : `:${h.port}`} · {h.auth}
+                    {h.hasSecret ? " 🔑" : ""}
+                  </div>
+                </button>
+                <button
+                  className="hidden text-neutral-500 hover:text-red-400 group-hover:block"
+                  title="Delete host"
+                  onClick={() => {
+                    void deleteHost(h.id).then(() => refresh(query));
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </li>
           ))}
-        </footer>
+        </ul>
+        <button
+          className={`${btn} m-2`}
+          onClick={() => {
+            void importKnownHosts()
+              .then((r) =>
+                setNotice(
+                  `imported ${r.imported} of ${r.total} known_hosts entries ` +
+                    `(${r.duplicates} already known, ${r.malformed} malformed)`,
+                ),
+              )
+              .catch((err) => setNotice(`import failed: ${String(err)}`));
+          }}
+        >
+          import ~/.ssh/known_hosts
+        </button>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-3 text-sm">
+          <span className="text-xs text-neutral-400">
+            {activeHost ? activeHost.name : "no session"} · {status}
+          </span>
+          <button
+            className={`${btn} ml-auto`}
+            disabled={status !== "connected"}
+            onClick={() => void disconnect()}
+          >
+            disconnect
+          </button>
+        </header>
+        <main className="min-h-0 flex-1">
+          <TerminalView
+            onReady={onTerminalReady}
+            onInput={onInput}
+            onResize={onResize}
+          />
+        </main>
+        {notice && (
+          <footer className="shrink-0 border-t border-neutral-800 px-3 py-1 font-mono text-[10px] text-neutral-400">
+            {notice}
+          </footer>
+        )}
+      </div>
+
+      {draft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-4 text-sm">
+            <h2 className="mb-3 text-base font-medium">New host</h2>
+            <div className="space-y-2">
+              <input
+                className={`${field} w-full`}
+                placeholder="name"
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              />
+              <div className="flex gap-2">
+                <input
+                  className={`${field} min-w-0 flex-1`}
+                  placeholder="hostname"
+                  value={draft.hostname}
+                  onChange={(e) =>
+                    setDraft({ ...draft, hostname: e.target.value })
+                  }
+                />
+                <input
+                  className={`${field} w-16`}
+                  placeholder="port"
+                  value={draft.port}
+                  onChange={(e) => setDraft({ ...draft, port: e.target.value })}
+                />
+              </div>
+              <input
+                className={`${field} w-full`}
+                placeholder="username"
+                value={draft.username}
+                onChange={(e) =>
+                  setDraft({ ...draft, username: e.target.value })
+                }
+              />
+              <select
+                className={`${field} w-full`}
+                value={draft.auth}
+                onChange={(e) =>
+                  setDraft({ ...draft, auth: e.target.value as AuthKind })
+                }
+              >
+                <option value="agent">ssh-agent</option>
+                <option value="key_file">private key</option>
+                <option value="password">password</option>
+              </select>
+              {draft.auth === "key_file" && (
+                <input
+                  className={`${field} w-full`}
+                  placeholder="path to private key"
+                  value={draft.keyPath}
+                  onChange={(e) =>
+                    setDraft({ ...draft, keyPath: e.target.value })
+                  }
+                />
+              )}
+              {draft.auth !== "agent" && (
+                <input
+                  className={`${field} w-full`}
+                  type="password"
+                  placeholder={
+                    draft.auth === "password" ? "password" : "key passphrase"
+                  }
+                  value={draft.secret}
+                  onChange={(e) =>
+                    setDraft({ ...draft, secret: e.target.value })
+                  }
+                />
+              )}
+              <p className="text-[10px] text-neutral-500">
+                Secrets go to the OS keychain, never to the database.
+              </p>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className={btn} onClick={() => setDraft(null)}>
+                cancel
+              </button>
+              <button
+                className={btn}
+                disabled={!draft.hostname}
+                onClick={() => void saveDraft()}
+              >
+                save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {prompt && (
+        <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />
+      )}
+      {changed && (
+        <ChangedKeyDialog
+          detail={changed}
+          onForget={() => void forgetChangedKey()}
+          onDismiss={() => setChanged(null)}
+        />
       )}
     </div>
   );

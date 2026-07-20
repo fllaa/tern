@@ -629,7 +629,13 @@ pub fn bench_auto() -> Option<AutoBenchCfg> {
         host: env_or("TERN_SSH_HOST", "127.0.0.1"),
         port: env_or("TERN_SSH_PORT", "2222").parse().ok()?,
         username: env_or("TERN_SSH_USER", "tern"),
-        key_path: env_or("TERN_SSH_KEY", ".rig/ssh/id_ed25519"),
+        // Relative to `apps/desktop`, which is where `bun run tauri dev` runs
+        // from — same convention as `bench_out_dir`. The bare `.rig/...` this
+        // used to default to could only resolve from the repo root, so
+        // `TERN_BENCH=auto bun run tauri dev` never worked without an explicit
+        // TERN_SSH_KEY. scripts/bench-ci.sh drives bench_sink directly and
+        // never goes through the webview, which is why it went unnoticed.
+        key_path: env_or("TERN_SSH_KEY", "../../.rig/ssh/id_ed25519"),
         chunk_max: env_or("TERN_BENCH_CHUNK", "131072").parse().ok()?,
         tick_ms: env_or("TERN_BENCH_TICK", "8").parse().ok()?,
         window_size: env_or("TERN_BENCH_WINDOW", "524288").parse().ok()?,
