@@ -9,6 +9,10 @@ authors.workspace = true
 description = "Local shells via portable-pty (ConPTY on Windows)"
 
 [dependencies]
+bytes.workspace = true
+portable-pty = "0.9.0"
+thiserror.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true
