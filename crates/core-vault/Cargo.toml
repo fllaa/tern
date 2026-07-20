@@ -9,6 +9,9 @@ authors.workspace = true
 description = "Secret storage: OS keyring wrapper + vault crypto (Phase 5; keyring spike in Phase 0)"
 
 [dependencies]
+keyring = "4"
+thiserror.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

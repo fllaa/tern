@@ -31,12 +31,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Linux system deps (Tauri / WebKitGTK 4.1)
+      - name: Linux system deps (Tauri / WebKitGTK 4.1 + keyring backend)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev
+            librsvg2-dev libxdo-dev libssl-dev gnome-keyring dbus
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
@@ -48,4 +48,14 @@ jobs:
       - name: Build UI (frontendDist must exist for the desktop crate)
         run: bun run --filter @tern/ui build
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - name: Tests (Linux — under a session D-Bus with an unlocked keyring,
+          so the Spike 4 secret-service round-trip runs for real)
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets --daemonize
+            cargo test --workspace --locked
+          '
+      - name: Tests (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: cargo test --workspace --locked
