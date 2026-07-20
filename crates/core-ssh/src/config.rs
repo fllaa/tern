@@ -68,7 +68,13 @@ pub struct SessionConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub auth: AuthMethod,
+    /// Methods to try, in order; the first that succeeds wins.
+    ///
+    /// A single-element chain is the common case and what [`Self::new`] builds.
+    /// Longer chains exist for "use the agent, but fall back to the password" —
+    /// note that `authenticate` skips any method the server has already refused
+    /// to offer, so a long chain does not squander the server's `MaxAuthTries`.
+    pub auth: Vec<AuthMethod>,
     /// `TERM` requested for the PTY.
     pub term: String,
     /// Protocol-level keepalives; `None` disables them.
@@ -95,7 +101,7 @@ impl SessionConfig {
             host: host.into(),
             port: 22,
             username: username.into(),
-            auth,
+            auth: vec![auth],
             term: "xterm-256color".into(),
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 3,

@@ -3,6 +3,20 @@ Port 22
 PermitRootLogin no
 PasswordAuthentication yes
 PubkeyAuthentication yes
+
+# Without this the rig stops exercising password auth at all.
+#
+# This image tracks alpine:3.22, which now carries OpenSSH 10.0p2 built without
+# PAM. In that configuration, with keyboard-interactive enabled, sshd serves the
+# password through keyboard-interactive and no longer advertises the standalone
+# `password` method — a probe reports "publickey,keyboard-interactive", and
+# every password test fails with "rejected". Turning it off restores
+# "publickey,password".
+#
+# Tern implements the `password` method; keyboard-interactive is deferred out of
+# Phase 1. The rig has to offer the method under test, or a rebuild silently
+# converts the password tests into tests of nothing.
+KbdInteractiveAuthentication no
 UseDNS no
 AllowTcpForwarding yes
 AcceptEnv TERM

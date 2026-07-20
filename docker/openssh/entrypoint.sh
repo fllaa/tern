@@ -20,4 +20,6 @@ if [ ! -f /bench/100mb.txt ]; then
 fi
 chmod 644 /bench/100mb.txt
 
-exec /usr/sbin/sshd -D -e
+# "$@" lets a compose service add -o overrides (the no-password variant the
+# auth-chain tests need) without a second image.
+exec /usr/sbin/sshd -D -e "$@"

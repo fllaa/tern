@@ -14,7 +14,7 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::ssh_key::HashAlg;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::{ChannelMsg, Disconnect};
+use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::config::{AuthMethod, SessionConfig};
@@ -256,37 +256,115 @@ impl ShellChannel {
     }
 }
 
+/// Work through the configured auth methods in order, stopping at the first
+/// that succeeds.
+///
+/// Two things make this more than a loop.
+///
+/// A method the server has already said it will not accept is skipped rather
+/// than attempted. Every attempt counts against the server's `MaxAuthTries`
+/// (6 by default), so spending one on a method that cannot succeed can deny a
+/// later, viable method its turn — a chain of agent-then-key-then-password
+/// against a `PasswordAuthentication no` server should not burn a try proving
+/// what the server already told us.
+///
+/// A local failure — no agent running, an unreadable key file — does not end
+/// the chain. That is the entire point of a fallback: "the agent isn't up, use
+/// the password" is the case being served.
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     cfg: &SessionConfig,
 ) -> Result<(), SshError> {
-    let user = cfg.username.clone();
-    let result = match &cfg.auth {
+    // What the server still offers, once it has told us. `None` means it has
+    // not yet, so nothing is skipped on the first attempt.
+    let mut offered: Option<MethodSet> = None;
+    let mut attempts: Vec<String> = Vec::new();
+
+    for method in &cfg.auth {
+        let label = method_label(method);
+
+        // Deliberately conservative: skip only against a non-empty list. The
+        // two mistakes are not symmetric — wrongly skipping breaks a config
+        // that would have worked, while wrongly attempting costs one auth try.
+        // An empty list carries no information worth breaking a login over.
+        if let Some(remaining) = &offered
+            && !remaining.is_empty()
+            && !remaining.contains(&method_kind(method))
+        {
+            attempts.push(format!("{label}: not offered by server"));
+            continue;
+        }
+
+        match try_method(handle, &cfg.username, method).await {
+            Ok(AuthResult::Success) => return Ok(()),
+            Ok(AuthResult::Failure {
+                remaining_methods, ..
+            }) => {
+                attempts.push(format!("{label}: rejected"));
+                offered = Some(remaining_methods);
+            }
+            // Never reached the server; the next method may still work.
+            Err(e) => attempts.push(format!("{label}: {e}")),
+        }
+    }
+
+    Err(SshError::AuthFailed(if attempts.is_empty() {
+        "no authentication methods configured".to_owned()
+    } else {
+        attempts.join("; ")
+    }))
+}
+
+/// Attempt a single method.
+///
+/// `Ok` carries the server's verdict. `Err` means the attempt never reached the
+/// server — a missing key file, an agent that is not running — which the caller
+/// treats as "try the next one" rather than as a failed authentication.
+async fn try_method(
+    handle: &mut client::Handle<ClientHandler>,
+    user: &str,
+    method: &AuthMethod,
+) -> Result<AuthResult, SshError> {
+    match method {
         AuthMethod::Password(password) => {
             // russh takes an owned String it does not zeroize, so the plain
             // copy is created here — at the last possible moment — rather than
             // being held anywhere with a longer life.
-            handle
-                .authenticate_password(user, password.as_str().to_owned())
-                .await?
+            Ok(handle
+                .authenticate_password(user.to_owned(), password.as_str().to_owned())
+                .await?)
         }
         AuthMethod::KeyFile { path, passphrase } => {
             let key = load_secret_key(path, passphrase.as_ref().map(|p| p.as_str()))
                 .map_err(|e| SshError::KeyLoad(e.to_string()))?;
             let hash = handle.best_supported_rsa_hash().await?.flatten();
-            handle
-                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-                .await?
+            Ok(handle
+                .authenticate_publickey(
+                    user.to_owned(),
+                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                )
+                .await?)
         }
-        AuthMethod::Agent => return authenticate_with_agent(handle, &user).await,
-    };
-    match result {
-        AuthResult::Success => Ok(()),
-        AuthResult::Failure {
-            remaining_methods, ..
-        } => Err(SshError::AuthFailed(format!(
-            "server accepts: {remaining_methods:?}"
-        ))),
+        AuthMethod::Agent => authenticate_with_agent(handle, user).await,
+    }
+}
+
+/// Which SSH method a configured auth uses, for comparison against what the
+/// server offers. Agent and key file are both `publickey` on the wire.
+fn method_kind(method: &AuthMethod) -> MethodKind {
+    match method {
+        AuthMethod::Password(_) => MethodKind::Password,
+        AuthMethod::KeyFile { .. } | AuthMethod::Agent => MethodKind::PublicKey,
+    }
+}
+
+/// Short name for the aggregated failure message. Carries the key path, which
+/// is what makes "which of my three keys failed?" answerable; never a secret.
+fn method_label(method: &AuthMethod) -> String {
+    match method {
+        AuthMethod::Password(_) => "password".to_owned(),
+        AuthMethod::KeyFile { path, .. } => format!("key {}", path.display()),
+        AuthMethod::Agent => "agent".to_owned(),
     }
 }
 
@@ -341,10 +419,16 @@ async fn connect_agent() -> Result<DynAgent, SshError> {
     ))
 }
 
+/// Offer every identity the agent holds, in the order the agent lists them.
+///
+/// Returns the server's verdict on the last identity tried, so the caller can
+/// read `remaining_methods` off it and skip methods the server has ruled out.
+/// An agent that is absent, empty, or holds nothing usable is an `Err` — the
+/// server never saw an attempt, and the next method in the chain should run.
 async fn authenticate_with_agent(
     handle: &mut client::Handle<ClientHandler>,
     user: &str,
-) -> Result<(), SshError> {
+) -> Result<AuthResult, SshError> {
     let mut agent = connect_agent().await?;
     let identities = agent
         .request_identities()
@@ -355,7 +439,8 @@ async fn authenticate_with_agent(
     }
     let hash = handle.best_supported_rsa_hash().await?.flatten();
 
-    let mut last_failure = String::from("no usable identities");
+    let mut last = None;
+    let mut last_error = String::from("no usable identities");
     for identity in identities {
         let key: PublicKey = match identity {
             AgentIdentity::PublicKey { key, .. } => key,
@@ -367,12 +452,14 @@ async fn authenticate_with_agent(
             .authenticate_publickey_with(user, key, hash, &mut agent)
             .await
         {
-            Ok(AuthResult::Success) => return Ok(()),
-            Ok(AuthResult::Failure { .. }) => last_failure = format!("{alg} key rejected"),
-            Err(e) => last_failure = format!("{alg}: {e:?}"),
+            Ok(AuthResult::Success) => return Ok(AuthResult::Success),
+            Ok(failure) => last = Some(failure),
+            Err(e) => last_error = format!("{alg}: {e:?}"),
         }
     }
-    Err(SshError::AuthFailed(format!("agent auth: {last_failure}")))
+    // A rejection is the server's answer and carries `remaining_methods`;
+    // having never got one means no identity reached it at all.
+    last.ok_or_else(|| SshError::Agent(last_error))
 }
 
 /// Read side of a split [`ShellChannel`] — owned by the output pump.

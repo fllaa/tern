@@ -4,6 +4,7 @@ RUN apk add --no-cache openssh coreutils findutils bash \
  && mkdir -p /bench /home/tern/.ssh \
  && chmod 700 /home/tern/.ssh && chown -R tern:tern /home/tern/.ssh
 COPY sshd_config /etc/ssh/sshd_config
+COPY sshd_config.nopassword /etc/ssh/sshd_config.nopassword
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 22

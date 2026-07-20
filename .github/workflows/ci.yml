@@ -135,8 +135,13 @@ jobs:
       # skip, and the suite passes while exercising nothing. macOS and Windows
       # runners have no Docker, so they keep skipping — which is exactly the
       # property require_rig! exists to preserve.
-      - name: Start sshd rig (OpenSSH + dropbear)
+      - name: Start sshd rig (OpenSSH, dropbear, publickey-only OpenSSH)
         run: ./scripts/sshd-rig.sh up
+      # Without these every test in core-ssh/tests/keys.rs skips, and the
+      # auth-chain test that needs an unauthorised key skips with them — the
+      # suite would stay green while exercising none of the key handling.
+      - name: Generate private-key fixtures
+        run: ./scripts/gen-key-fixtures.sh
       - name: Integration tests against the rig
         run: |
           dbus-run-session -- bash -c '

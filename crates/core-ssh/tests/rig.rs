@@ -13,6 +13,8 @@ use tern_core_ssh::{AuthMethod, SessionConfig, ShellChannel, SshSession, accept_
 
 const OPENSSH_PORT: u16 = 2222;
 const DROPBEAR_PORT: u16 = 2223;
+/// `PasswordAuthentication no`; see the compose service of the same name.
+const NOPASSWORD_PORT: u16 = 2224;
 
 fn rig_host() -> String {
     std::env::var("TERN_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".into())
@@ -44,6 +46,25 @@ macro_rules! require_rig {
 
 fn key_auth() -> AuthMethod {
     AuthMethod::key_file(rig_key(), None)
+}
+
+/// A real key that the rig does *not* authorise, from the key fixtures. Needed
+/// to make an attempt the server actually rejects, rather than one that fails
+/// locally before it is ever sent.
+macro_rules! require_key_fixture {
+    ($name:expr) => {{
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.rig/keys")
+            .join($name);
+        if !path.exists() {
+            eprintln!(
+                "SKIP: key fixture {} missing (scripts/gen-key-fixtures.sh)",
+                path.display()
+            );
+            return;
+        }
+        path
+    }};
 }
 
 async fn connect(port: u16, auth: AuthMethod) -> SshSession {
@@ -110,6 +131,128 @@ async fn wrong_password_fails() {
     };
     let result = SshSession::connect(cfg, accept_any_host_key()).await;
     assert!(result.is_err(), "auth with a wrong password must fail");
+}
+
+/// The fallback case worth having: the first method cannot even be attempted
+/// (the key file does not exist) and the chain moves on rather than giving up.
+#[tokio::test]
+async fn a_local_failure_falls_through_to_the_next_method() {
+    require_rig!(OPENSSH_PORT);
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        auth: vec![
+            AuthMethod::key_file("/nonexistent/key", None),
+            AuthMethod::password("tern123"),
+        ],
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Agent)
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("password should carry the connection after the key file fails");
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+    shell.write("echo chain-ok\n").await.expect("write");
+    read_until(&mut shell, "chain-ok", Duration::from_secs(10)).await;
+    shell.close().await.expect("close");
+}
+
+/// Order matters: a working first method must not be skipped in favour of a
+/// later one, or "prefer the key, fall back to the password" would silently
+/// become "always use the password".
+#[tokio::test]
+async fn the_first_working_method_wins() {
+    require_rig!(OPENSSH_PORT);
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        // A wrong password after a good key: if the chain ran to the end, or ran
+        // out of order, this would fail.
+        auth: vec![key_auth(), AuthMethod::password("definitely-wrong")],
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Agent)
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("the key should authenticate before the password is reached");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// When everything fails, the error has to say what was tried — one line per
+/// method, with the key path. "Authentication failed" alone is unactionable
+/// when three methods were involved.
+#[tokio::test]
+async fn an_exhausted_chain_reports_every_attempt() {
+    require_rig!(OPENSSH_PORT);
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        auth: vec![
+            AuthMethod::key_file("/nonexistent/key", None),
+            AuthMethod::password("wrong"),
+        ],
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Agent)
+    };
+    // `SshSession` has no `Debug`, so `expect_err` is unavailable here.
+    let msg = match SshSession::connect(cfg, accept_any_host_key()).await {
+        Ok(_) => panic!("both methods are bad; the connect must fail"),
+        Err(e) => e.to_string(),
+    };
+
+    assert!(
+        msg.contains("/nonexistent/key"),
+        "the failing key path should be named: {msg}"
+    );
+    assert!(
+        msg.contains("password"),
+        "the password attempt should be named: {msg}"
+    );
+}
+
+/// The skip branch, against a server that really does refuse passwords.
+///
+/// The first key is real but not authorised, so it reaches the server and is
+/// rejected — which is what populates the remaining-methods list. (A
+/// *nonexistent* key would fail locally, never reach the server, and leave
+/// nothing to skip against.) The list then says publickey only, so the password
+/// is skipped rather than attempted.
+///
+/// Worth a dedicated server: on the main rig, which offers both methods, this
+/// branch never executes, and a wrong `method_kind` mapping would go unnoticed
+/// while silently skipping methods that would have worked.
+#[tokio::test]
+async fn a_method_the_server_refuses_is_skipped_not_attempted() {
+    require_rig!(NOPASSWORD_PORT);
+    let unauthorised = require_key_fixture!("id_ed25519");
+    let cfg = SessionConfig {
+        port: NOPASSWORD_PORT,
+        auth: vec![
+            AuthMethod::key_file(unauthorised, None),
+            AuthMethod::password("tern123"),
+        ],
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Agent)
+    };
+    let msg = match SshSession::connect(cfg, accept_any_host_key()).await {
+        Ok(_) => panic!("password auth is disabled on this server; connect must fail"),
+        Err(e) => e.to_string(),
+    };
+
+    assert!(
+        msg.contains("password: not offered by server"),
+        "the password should have been skipped, not attempted: {msg}"
+    );
+}
+
+/// The other half of that pairing: a method the server *does* offer is still
+/// attempted after an earlier failure. Without this, the test above would pass
+/// just as happily if the chain skipped everything.
+#[tokio::test]
+async fn an_offered_method_is_still_attempted_after_an_earlier_failure() {
+    require_rig!(NOPASSWORD_PORT);
+    let cfg = SessionConfig {
+        port: NOPASSWORD_PORT,
+        auth: vec![AuthMethod::key_file("/nonexistent/key", None), key_auth()],
+        ..SessionConfig::new(rig_host(), "tern", AuthMethod::Agent)
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("the real key is publickey, which this server does offer");
+    session.disconnect().await.expect("disconnect");
 }
 
 #[tokio::test]
