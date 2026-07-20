@@ -24,6 +24,11 @@ tauri = { version = "2", features = [] }
 tern-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tern-core-pty.workspace = true
+tern-term-stream.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tern-core-ssh.workspace = true
 
 [lints]
 workspace = true
