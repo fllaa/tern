@@ -13,7 +13,7 @@
 
 use tern_core_ssh::AuthMethod;
 use tern_core_store::{AuthKind, Host, HostId};
-use tern_core_vault::{OsKeyring, VaultError};
+use tern_core_vault::{KeyringAvailability, OsKeyring, VaultError};
 
 /// Keyring service name. The bundle identifier, so entries are attributable in
 /// Keychain Access / Credential Manager / seahorse.
@@ -57,29 +57,74 @@ pub fn clear_secret(account: &str) -> Result<(), VaultError> {
     }
 }
 
+/// Whether the OS credential store works on this machine.
+///
+/// Probed rather than assumed: a Linux box with no Secret Service running
+/// (headless, a bare WM, a container) fails every keyring call, and silently
+/// offering to "remember" a password that is then discarded is worse than
+/// saying up front that it cannot be.
+pub fn keyring_availability() -> KeyringAvailability {
+    keyring().availability()
+}
+
+/// Fetch a stored credential, separating "nothing saved" from "could not ask".
+///
+/// Returns the secret (if any) and a note explaining any degradation.
+fn read_secret(account: &str) -> (Option<String>, Option<String>) {
+    match keyring().get_password(account) {
+        Ok(secret) => (Some(secret), None),
+        Err(VaultError::NotFound) => (None, None),
+        Err(VaultError::Store(reason)) => (
+            None,
+            Some(format!(
+                "a credential is saved for this host but the credential store could \
+                 not be read ({reason}); connecting without it"
+            )),
+        ),
+    }
+}
+
+/// The auth to attempt, plus anything the user needs told about how it was
+/// assembled.
+pub struct ResolvedAuth {
+    pub method: AuthMethod,
+    /// Set when a credential was expected but could not be read. Carried
+    /// alongside rather than turned into an error, because the connection
+    /// should still be attempted — an agent or a key with no passphrase may
+    /// well succeed regardless.
+    pub degraded: Option<String>,
+}
+
 /// Build the transport auth for a host, pulling any credential from the
 /// keyring at the last moment.
 ///
-/// A missing keyring entry is not an error here. `secret_ref` records that a
-/// credential *was* stored; the keyring can still say otherwise (the user
-/// cleared it, a different machine, a keyring that failed to unlock). The
+/// A *missing* keyring entry is not an error. `secret_ref` records that a
+/// credential was stored once; the keyring can legitimately say otherwise (the
+/// user cleared it, a different machine, a keyring that failed to unlock). The
 /// honest result is auth without a secret, which fails with a real
-/// authentication error the user can act on — rather than a confusing
-/// storage-layer error at connect time.
-pub fn auth_for_host(host: &Host) -> AuthMethod {
-    let stored = host
-        .secret_ref
-        .as_deref()
-        .and_then(|account| keyring().get_password(account).ok());
+/// authentication error rather than a confusing storage-layer one.
+///
+/// An *unreadable* keyring is different, and worth separating. "Authentication
+/// failed" for a password the user is certain they saved sends them to check
+/// the password; "the credential store could not be read" sends them to check
+/// the credential store. Only the second is actionable, so the reason travels
+/// with the attempt.
+pub fn auth_for_host(host: &Host) -> ResolvedAuth {
+    let (stored, degraded) = match host.secret_ref.as_deref() {
+        None => (None, None),
+        Some(account) => read_secret(account),
+    };
 
-    match host.auth {
+    let method = match host.auth {
         AuthKind::Agent => AuthMethod::Agent,
         AuthKind::Password => AuthMethod::password(stored.unwrap_or_default()),
         AuthKind::KeyFile => {
             let path = host.key_path.clone().unwrap_or_default();
             AuthMethod::key_file(path, stored)
         }
-    }
+    };
+
+    ResolvedAuth { method, degraded }
 }
 
 #[cfg(test)]

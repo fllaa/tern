@@ -403,8 +403,14 @@ pub async fn open_session(
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("no such host {host_id}"))?;
 
-            let auth = crate::auth::auth_for_host(&host);
-            let ssh_cfg = crate::session_cfg::for_host(&host, auth, &req);
+            let resolved = crate::auth::auth_for_host(&host);
+            // Emitted before the connect rather than folded into its failure:
+            // the attempt may well succeed, and the user still wants to know
+            // their saved credential was not the thing that carried it.
+            if let Some(note) = resolved.degraded {
+                let _ = events.send(SessionEvent::Warning { message: note });
+            }
+            let ssh_cfg = crate::session_cfg::for_host(&host, resolved.method, &req);
             connect_ssh(
                 &state,
                 &id,

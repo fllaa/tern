@@ -12,10 +12,11 @@
 use tauri::State;
 use tern_core_ssh::KnownHostsFile;
 use tern_core_store::{AuthKind, HostFilter, HostOverrides, NewHost, Store};
+use tern_core_vault::KeyringAvailability;
 use tern_proto::{
-    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KnownHostEntryDto,
-    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, SshConfigCandidateDto,
-    SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
+    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto, KeyringStatusDto,
+    KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
+    SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 
 use crate::auth;
@@ -605,4 +606,77 @@ pub async fn import_ssh_config(
         })
     })
     .await
+}
+
+/// Whether credentials can be stored on this machine.
+///
+/// Called before the UI offers to remember a password or passphrase. Cheap and
+/// side-effect free — it reads an account that does not exist and reports
+/// whether the store answered "no such entry" (working) or failed outright.
+#[tauri::command]
+pub async fn keyring_status() -> Result<KeyringStatusDto, String> {
+    // A keyring call can block on D-Bus or a Keychain prompt, so it does not
+    // belong on the async runtime's thread.
+    tauri::async_runtime::spawn_blocking(|| match auth::keyring_availability() {
+        KeyringAvailability::Available => KeyringStatusDto {
+            available: true,
+            reason: None,
+        },
+        KeyringAvailability::Unavailable { reason } => KeyringStatusDto {
+            available: false,
+            reason: Some(reason),
+        },
+    })
+    .await
+    .map_err(|e| format!("keyring probe failed: {e}"))
+}
+
+fn key_info_dto(info: &tern_core_ssh::KeyInfo) -> KeyInfoDto {
+    KeyInfoDto {
+        format: info.format.as_str().to_owned(),
+        ppk_version: match info.format {
+            tern_core_ssh::KeyFormat::Ppk { version } => Some(version),
+            _ => None,
+        },
+        encrypted: info.encrypted,
+        algorithm: info.algorithm.clone(),
+        fingerprint: info.fingerprint.clone(),
+        comment: info.comment.clone(),
+    }
+}
+
+/// Describe a private key file without unlocking it.
+///
+/// Takes no passphrase and does not fail on encrypted keys — the UI calls this
+/// to decide whether to ask for one at all.
+#[tauri::command]
+pub async fn inspect_key(path: String) -> Result<KeyInfoDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        tern_core_ssh::inspect(&path)
+            .map(|info| key_info_dto(&info))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("key inspection failed: {e}"))?
+}
+
+/// Check a passphrase against a key file before it is written to the keyring.
+///
+/// Storing an unverified passphrase turns a typo into a connection failure much
+/// later, somewhere far less obviously connected to the mistake.
+///
+/// The passphrase arrives over IPC because only the webview has it at this
+/// point; it is used and dropped here, never stored by this call.
+#[tauri::command]
+pub async fn verify_key_passphrase(
+    path: String,
+    passphrase: Option<String>,
+) -> Result<KeyInfoDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        tern_core_ssh::unlock(&path, passphrase.as_deref())
+            .map(|info| key_info_dto(&info))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("key unlock failed: {e}"))?
 }

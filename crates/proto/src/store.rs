@@ -245,3 +245,36 @@ pub struct SshConfigImportResultDto {
     pub created: usize,
     pub updated: usize,
 }
+
+/// Whether this machine can store credentials, and why not when it cannot.
+///
+/// The UI needs this before offering to remember anything: a Linux box with no
+/// Secret Service running fails every keyring write, and an offer that silently
+/// does nothing is worse than no offer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyringStatusDto {
+    pub available: bool,
+    /// The platform's own message when unavailable. Kept verbatim because it is
+    /// the only thing distinguishing "D-Bus is not running" from "the keyring is
+    /// locked" — different problems with different fixes.
+    pub reason: Option<String>,
+}
+
+/// What a private key file turned out to be.
+///
+/// `algorithm` and `fingerprint` are `None` when the format encrypts them away
+/// (PEM, PKCS#8) — "not knowable until unlocked", not "absent". OpenSSH and
+/// .ppk keep that metadata in cleartext and report it even while locked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyInfoDto {
+    /// `openssh` | `pem` | `pkcs8` | `ppk`.
+    pub format: String,
+    /// 2 or 3 for .ppk, absent otherwise.
+    pub ppk_version: Option<u8>,
+    pub encrypted: bool,
+    pub algorithm: Option<String>,
+    pub fingerprint: Option<String>,
+    pub comment: Option<String>,
+}

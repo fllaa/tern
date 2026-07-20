@@ -65,6 +65,10 @@ pub fn run() {
             // ssh_config import
             store_commands::scan_ssh_config,
             store_commands::import_ssh_config,
+            // auth: credential store health, key import
+            store_commands::keyring_status,
+            store_commands::inspect_key,
+            store_commands::verify_key_passphrase,
             // benchmark harness (Phase 0; kept runnable so regressions show)
             commands::bench_reset,
             commands::bench_stats,

@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 mod store;
 
 pub use store::{
-    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KnownHostEntryDto,
-    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, SshConfigCandidateDto,
-    SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
+    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto, KeyringStatusDto,
+    KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
+    SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 
 /// Opaque identifier for a terminal session (SSH or local PTY).
@@ -145,6 +145,16 @@ pub enum SessionEvent {
         code: Option<u32>,
     },
     Error {
+        message: String,
+    },
+    /// Something the user should know that did not stop the connection.
+    ///
+    /// Separate from `Error`, which is terminal. The case this exists for is a
+    /// host with a saved credential on a machine whose credential store cannot
+    /// be read: the connect still proceeds — an agent or an unencrypted key may
+    /// carry it — but "authentication failed" alone would send the user to
+    /// check a password that was never the problem.
+    Warning {
         message: String,
     },
 }
