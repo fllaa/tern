@@ -9,12 +9,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use russh::ChannelWriteHalf;
 use russh::client::{self, AuthResult};
-#[cfg(unix)]
 use russh::keys::PublicKey;
-#[cfg(unix)]
 use russh::keys::agent::AgentIdentity;
-#[cfg(unix)]
-use russh::keys::agent::client::AgentClient;
+use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::ssh_key::HashAlg;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
@@ -281,24 +278,7 @@ async fn authenticate(
                 .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
                 .await?
         }
-        AuthMethod::Agent => {
-            #[cfg(unix)]
-            {
-                return authenticate_with_agent(handle, &user).await;
-            }
-            #[cfg(not(unix))]
-            {
-                // russh ships both halves already — AgentClient::connect_named_pipe
-                // and ::connect_pageant — so this is wiring, not protocol work.
-                // Landing it in the auth-matrix milestone so it ships together
-                // with the 3-OS verification pass that can actually exercise it.
-                return Err(SshError::Agent(
-                    "ssh-agent auth is unix-only in this build; Windows named-pipe \
-                     and Pageant support lands with the Phase 1 auth matrix"
-                        .into(),
-                ));
-            }
-        }
+        AuthMethod::Agent => return authenticate_with_agent(handle, &user).await,
     };
     match result {
         AuthResult::Success => Ok(()),
@@ -310,14 +290,62 @@ async fn authenticate(
     }
 }
 
+/// An agent connection with its transport type erased.
+///
+/// The platform connectors return three unrelated concrete types — a unix
+/// socket, a Windows named pipe, and Pageant's shared-memory stream — so
+/// without this the identity loop below would have to be written three times.
+/// `AgentClient::dynamic` boxes the stream, which is what russh provides it for.
+type DynAgent = AgentClient<Box<dyn AgentStream + Send + Unpin>>;
+
 #[cfg(unix)]
+async fn connect_agent() -> Result<DynAgent, SshError> {
+    AgentClient::connect_env()
+        .await
+        .map(AgentClient::dynamic)
+        .map_err(|e| SshError::Agent(e.to_string()))
+}
+
+/// Windows has two agents in common use and no environment variable to pick
+/// between them, so both are tried in turn.
+///
+/// OpenSSH's comes first: it ships in-box on Windows 10+ and is what `ssh-add`
+/// talks to by default. Pageant is `PuTTY`'s, and remains widely used by anyone
+/// who arrived from `PuTTY` — which, for an SSH client, is a lot of people.
+///
+/// A failure here reports *both* attempts. "No ssh-agent" with no further
+/// detail is unactionable on a platform where the answer is usually "the
+/// service is not running" for one of two different services.
+#[cfg(windows)]
+async fn connect_agent() -> Result<DynAgent, SshError> {
+    /// Fixed path for the OpenSSH agent service; not configurable in OpenSSH
+    /// for Windows, so hardcoding it is correct rather than lazy.
+    const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+    let openssh = match AgentClient::connect_named_pipe(OPENSSH_PIPE).await {
+        Ok(agent) => return Ok(agent.dynamic()),
+        Err(e) => e,
+    };
+    match AgentClient::connect_pageant().await {
+        Ok(agent) => Ok(agent.dynamic()),
+        Err(pageant) => Err(SshError::Agent(format!(
+            "no ssh-agent reachable: OpenSSH named pipe ({openssh}); Pageant ({pageant})"
+        ))),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn connect_agent() -> Result<DynAgent, SshError> {
+    Err(SshError::Agent(
+        "ssh-agent auth is not supported on this platform".into(),
+    ))
+}
+
 async fn authenticate_with_agent(
     handle: &mut client::Handle<ClientHandler>,
     user: &str,
 ) -> Result<(), SshError> {
-    let mut agent = AgentClient::connect_env()
-        .await
-        .map_err(|e| SshError::Agent(e.to_string()))?;
+    let mut agent = connect_agent().await?;
     let identities = agent
         .request_identities()
         .await
