@@ -1,0 +1,13 @@
+{
+  "name": "tern-workspace",
+  "private": true,
+  "workspaces": ["ui"],
+  "scripts": {
+    "tauri": "cd apps/desktop && tauri",
+    "dev": "bun run tauri dev",
+    "build": "bun run tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.0"
+  }
+}
