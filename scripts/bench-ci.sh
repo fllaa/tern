@@ -13,12 +13,25 @@ scripts/sshd-rig.sh up
 bun install --frozen-lockfile >/dev/null
 
 echo "== core path (bench_sink) =="
-core_json=$(cargo run --release -p tern-core-ssh --example bench_sink 2>/dev/null | tail -1)
+# stderr goes to a log we print on failure — a panicking floor assert must not
+# vanish into /dev/null.
+if ! cargo run --release -p tern-core-ssh --example bench_sink >/tmp/bench-core.out 2>/tmp/bench-core.err; then
+  echo "bench_sink failed:" >&2
+  cat /tmp/bench-core.err >&2
+  exit 1
+fi
+core_json=$(tail -1 /tmp/bench-core.out)
 echo "$core_json"
 
 echo "== xterm-headless parse path =="
-headless_json=$(cargo run --release -p tern-core-ssh --example bench_sink -- --emit-raw 2>/dev/null \
-  | bun scripts/bench-xterm-headless.mjs)
+if ! cargo run --release -p tern-core-ssh --example bench_sink -- --emit-raw 2>/tmp/bench-raw.err \
+  | bun scripts/bench-xterm-headless.mjs >/tmp/bench-headless.out; then
+  echo "headless consumer failed:" >&2
+  cat /tmp/bench-raw.err >&2
+  cat /tmp/bench-headless.out >&2 || true
+  exit 1
+fi
+headless_json=$(tail -1 /tmp/bench-headless.out)
 echo "$headless_json"
 
 printf '{"core":%s,"headless":%s}\n' "$core_json" "$headless_json" >bench-results.json

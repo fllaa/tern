@@ -12,6 +12,8 @@ import { Terminal } from "@xterm/headless";
 
 const HIGH = 384 * 1024;
 const LOW = 64 * 1024;
+// Dev-machine floor is 30 MB/s; CI sets a runner-class floor via env.
+const FLOOR = Number(process.env.TERN_BENCH_HEADLESS_FLOOR ?? 30);
 
 const term = new Terminal({
   cols: 120,
@@ -66,10 +68,11 @@ process.stdin.on("end", () => {
       parsed_mbps: Number(mbps.toFixed(2)),
       max_pending: maxPending,
       pauses,
-      floor_30mbps: mbps >= 30,
+      floor_mbps: FLOOR,
+      floor_ok: mbps >= FLOOR,
     };
     console.log(JSON.stringify(out));
-    process.exit(mbps >= 30 ? 0 : 1);
+    process.exit(mbps >= FLOOR ? 0 : 1);
   };
   finish();
 });

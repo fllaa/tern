@@ -86,8 +86,8 @@ echo p95 > 32 ms, reproducible loss, or > 500 ms stalls.
 ## Headless slice (CI-runnable — \`scripts/bench-ci.sh\`, no webview)
 
 ${core ? core.results.map((r) => `- **${r.name}** (bench_sink: SSH → pump → coalescer → sink): ${r.mbps.toFixed(1)} MB/s, ${r.newlines.toLocaleString("en-US")} newlines, complete=${r.complete}`).join("\n") : "- core: not recorded"}
-${core ? `- core floor ≥ 80 MB/s: ${core.core_floor_80mbps ? "✅" : "❌"} · lossless: ${core.lossless ? "✅" : "❌"}` : ""}
-${headless ? `- **@xterm/headless consumer** (same watermark logic over a real backpressured pipe): ${headless.parsed_mbps} MB/s parsed, ${headless.pauses} pauses, floor ≥ 30 MB/s: ${headless.floor_30mbps ? "✅" : "❌"}` : "- headless: not recorded"}
+${core ? `- core floor ≥ ${core.core_floor_mbps ?? 80} MB/s: ${(core.core_floor_ok ?? core.core_floor_80mbps) ? "✅" : "❌"} · lossless: ${core.lossless ? "✅" : "❌"}` : ""}
+${headless ? `- **@xterm/headless consumer** (same watermark logic over a real backpressured pipe): ${headless.parsed_mbps} MB/s parsed, ${headless.pauses} pauses, floor ≥ ${headless.floor_mbps ?? 30} MB/s: ${(headless.floor_ok ?? headless.floor_30mbps) ? "✅" : "❌"}` : "- headless: not recorded"}
 
 ## Caveats
 

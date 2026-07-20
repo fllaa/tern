@@ -44,10 +44,10 @@ echo p95 > 32 ms, reproducible loss, or > 500 ms stalls.
 
 ## Headless slice (CI-runnable — `scripts/bench-ci.sh`, no webview)
 
-- **core_seq2m** (bench_sink: SSH → pump → coalescer → sink): 40.1 MB/s, 2,000,003 newlines, complete=true
-- **core_cat100mb** (bench_sink: SSH → pump → coalescer → sink): 127.0 MB/s, 1,379,709 newlines, complete=true
+- **core_seq2m** (bench_sink: SSH → pump → coalescer → sink): 38.8 MB/s, 2,000,003 newlines, complete=true
+- **core_cat100mb** (bench_sink: SSH → pump → coalescer → sink): 127.3 MB/s, 1,379,709 newlines, complete=true
 - core floor ≥ 80 MB/s: ✅ · lossless: ✅
-- **@xterm/headless consumer** (same watermark logic over a real backpressured pipe): 72.79 MB/s parsed, 225 pauses, floor ≥ 30 MB/s: ✅
+- **@xterm/headless consumer** (same watermark logic over a real backpressured pipe): 77.54 MB/s parsed, 217 pauses, floor ≥ 30 MB/s: ✅
 
 ## Caveats
 

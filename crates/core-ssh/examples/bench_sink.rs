@@ -181,10 +181,16 @@ async fn main() {
         .iter()
         .find(|r| r.name == "core_cat100mb")
         .expect("cat scenario ran");
-    let floor_ok = cat.mbps >= 80.0;
+    // Dev-machine floor is 80 MB/s; CI runners are slower shared hardware, so
+    // the workflow sets a runner-class floor via env (see bench.yml).
+    let floor: f64 = std::env::var("TERN_BENCH_CORE_FLOOR")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80.0);
+    let floor_ok = cat.mbps >= floor;
 
     let json = format!(
-        "{{\"results\":[{}],\"lossless\":{all_complete},\"core_floor_80mbps\":{floor_ok}}}",
+        "{{\"results\":[{}],\"lossless\":{all_complete},\"core_floor_mbps\":{floor},\"core_floor_ok\":{floor_ok}}}",
         results
             .iter()
             .map(|r| format!(
@@ -204,7 +210,7 @@ async fn main() {
     assert!(all_complete, "core path lost data or missed markers");
     assert!(
         floor_ok,
-        "core path below 80 MB/s floor: {:.2} MB/s",
+        "core path below {floor} MB/s floor: {:.2} MB/s",
         cat.mbps
     );
 }

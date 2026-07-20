@@ -22,6 +22,12 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Run CI-runnable slice of the Phase 0 throughput benchmark
+        env:
+          # Runner-class floors: shared 4-vCPU runners are ~3x slower than the
+          # dev machine (80 / 30 MB/s there). These guard regressions per
+          # hardware class, not absolute UX targets.
+          TERN_BENCH_CORE_FLOOR: "25"
+          TERN_BENCH_HEADLESS_FLOOR: "12"
         run: |
           # Contract (Spike 2): scripts/bench-ci.sh brings up the sshd rig, runs
           # the headless pipeline (russh -> coalescer -> sink, plus the
