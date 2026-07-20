@@ -1,0 +1,40 @@
+name: Throughput bench
+
+# The Phase 0 perf budget, runnable on demand: apply the `bench` label to a PR
+# or dispatch manually. Kept off the every-push path to save runner minutes.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  bench:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'bench'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Run CI-runnable slice of the Phase 0 throughput benchmark
+        run: |
+          # Contract (Spike 2): scripts/bench-ci.sh brings up the sshd rig, runs
+          # the headless pipeline (russh -> coalescer -> sink, plus the
+          # xterm-headless consumer), enforces thresholds, and writes
+          # bench-results.json. Until Spike 2 lands, this is a no-op.
+          if [ -x scripts/bench-ci.sh ]; then
+            scripts/bench-ci.sh
+          else
+            echo "scripts/bench-ci.sh not implemented yet (Phase 0 Spike 2)"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench-results.json
+          if-no-files-found: ignore

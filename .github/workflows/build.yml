@@ -1,0 +1,58 @@
+name: Build installers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest # Apple Silicon; x86_64 / universal builds are a Phase 6 task
+          # NOTE(Phase 6): Linux artifacts inherit ubuntu-24.04's glibc (~2.39) as the
+          # floor. For wider distro reach, move this job into a Debian 12 container
+          # before public release. ubuntu-22.04 runners begin brownouts 2026-09-17,
+          # so we deliberately do not use them.
+          - os: ubuntu-24.04
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev patchelf xdg-utils
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ---- Phase 6 signing slots (see docs/signing-checklist.md) ----
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}            # base64 .p12 (Developer ID Application)
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}  # "Developer ID Application: Name (TEAMID)"
+          # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}              # notarytool via App Store Connect API key
+          # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+          # Windows signing wires through bundle.windows.signCommand in
+          # tauri.conf.json (Azure Artifact Signing or alternative CA) — see checklist.
+        with:
+          projectPath: apps/desktop
+          # No tagName/releaseId => build-only; bundles land as workflow artifacts.
+          uploadWorkflowArtifacts: true
