@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/fllaa/tern"
 authors = ["Fallah Andy Prakasa <fallahandyprakasa26@gmail.com>"]
@@ -31,7 +31,7 @@ tern-core-serial = { path = "crates/core-serial" }
 # Shared external (spike work adds russh/portable-pty/keyring here)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time", "signal"] }
 bytes = "1"
 thiserror = "2"
 tracing = "0.1"

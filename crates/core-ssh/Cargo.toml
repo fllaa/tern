@@ -9,6 +9,15 @@ authors.workspace = true
 description = "russh session management: connect, auth, channels, PTY, keepalives"
 
 [dependencies]
+bytes.workspace = true
+russh = "0.62.2"
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+crossterm = "0.29.0"
+rpassword = "7.5.4"

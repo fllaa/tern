@@ -1,18 +1,17 @@
-//! russh-based SSH session management: connect, auth (password / key / agent),
-//! shell channels with PTY, resize, and keepalives.
+//! russh-based SSH session management: connect, auth (password / key file /
+//! agent), shell channels with PTY, resize, keepalives, and TOFU host-key
+//! verification via callback.
 //!
-//! Phase 0 Spike 1 lands the real API here.
+//! Backpressure is structural: every queue between the russh session loop and
+//! the consumer is bounded, so a stalled consumer drains the SSH window and
+//! throttles the remote process. See `docs/adr/0011` in the repo root.
+//!
 //! This crate must never depend on `tauri`.
 
-/// Placeholder until Spike 1 lands the session API.
-pub fn crate_name() -> &'static str {
-    "tern-core-ssh"
-}
+mod config;
+mod error;
+mod session;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_harness_wiring() {
-        assert_eq!(super::crate_name(), "tern-core-ssh");
-    }
-}
+pub use config::{AuthMethod, SessionConfig};
+pub use error::SshError;
+pub use session::{HostKeyCallback, HostKeyInfo, ShellChannel, SshSession, accept_any_host_key};
