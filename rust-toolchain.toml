@@ -1,0 +1,5 @@
+# Pinned so `clippy -D warnings` in CI never breaks from a background rustup
+# update. Bump deliberately in a dedicated commit.
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/proto",
+  "crates/core-ssh",
+  "crates/term-stream",
+  "crates/core-pty",
+  "crates/core-sftp",
+  "crates/core-vault",
+  "crates/core-serial",
+  "apps/desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/fllaa/tern"
+authors = ["Fallah Andy Prakasa <fallahandyprakasa26@gmail.com>"]
+
+[workspace.dependencies]
+# Internal
+tern-proto = { path = "crates/proto" }
+tern-core-ssh = { path = "crates/core-ssh" }
+tern-term-stream = { path = "crates/term-stream" }
+tern-core-pty = { path = "crates/core-pty" }
+tern-core-sftp = { path = "crates/core-sftp" }
+tern-core-vault = { path = "crates/core-vault" }
+tern-core-serial = { path = "crates/core-serial" }
+# Shared external (spike work adds russh/portable-pty/keyring here)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
+bytes = "1"
+thiserror = "2"
+tracing = "0.1"
+zeroize = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic opt-outs that fight real code without adding safety:
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+# Escalate the footguns (CI's -D warnings turns these into errors):
+unwrap_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+# Terminal-throughput app: speed over size.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

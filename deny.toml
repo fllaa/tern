@@ -1,0 +1,48 @@
+# cargo-deny policy. Run locally with `cargo deny check`; CI runs it on
+# manifest changes and weekly (advisories rot without commits).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # Each entry here requires an inline `reason`.
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",              # weak copyleft, file-scoped; fine for an Apache-2.0 app
+  "CDLA-Permissive-2.0",
+]
+exceptions = [
+  # ring's OpenSSL/ISC/MIT combo tends to appear via Rust crypto stacks; add
+  # a scoped exception here when/if it does:
+  # { crate = "ring", allow = ["OpenSSL"] },
+]
+
+[bans]
+multiple-versions = "warn"   # start lenient; tighten to "deny" post-Phase-1
+wildcards = "deny"
+deny = [
+  # Enforce the pure-Rust story (docs/adr/0003). ssh2/libssh2 is the documented
+  # fallback — if that fallback ever triggers, deleting these lines is the
+  # ADR-gated cost, done consciously.
+  { crate = "openssl-sys", reason = "pure-Rust TLS/crypto only" },
+  { crate = "libssh2-sys", reason = "russh is the chosen transport; see ADR-0003" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,2 @@
+# Stable options only — `cargo fmt` must work without nightly.
+style_edition = "2024"
