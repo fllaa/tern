@@ -1,0 +1,9 @@
+# Test-rig sshd config. Loopback-only container; credentials are fixtures.
+Port 22
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+UseDNS no
+AllowTcpForwarding yes
+AcceptEnv TERM
+Subsystem sftp internal-sftp
