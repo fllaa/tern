@@ -21,7 +21,9 @@ later is a one-line bump.
 
 The component layer is settled separately in ADR-0014: LiltUI on Base UI,
 vendored copy-in. Frontend lint/format/test tooling is Biome + Vitest, added in
-Phase 1 — CONTRIBUTING lists the commands.
+Phase 1 — CONTRIBUTING lists the commands. Vitest runs under jsdom, which has no
+layout engine, so ADR-0017 adds a small Playwright tier for the geometry that
+tier structurally cannot see.
 
 ## Consequences
 

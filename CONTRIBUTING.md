@@ -20,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 bun run format          # biome: format + safe lint fixes
 bun run test            # vitest
+bun run test:e2e        # playwright layout smoke test (needs: bunx playwright install chromium)
 bun run --filter @tern/ui build
 cargo deny check        # optional locally; CI runs it
 ```
@@ -27,6 +28,13 @@ cargo deny check        # optional locally; CI runs it
 The Rust integration tests need the sshd rig — `./scripts/sshd-rig.sh up`.
 They skip cleanly without it, so a green `cargo test` on a machine with no
 Docker does *not* mean the integration suite ran.
+
+`test:e2e` is a deliberately small browser tier — it loads the shell in headless
+Chromium and checks geometry, nothing else. It exists because Vitest runs under
+jsdom, which has no layout engine: every `offsetWidth` is 0, so a sidebar that
+renders 40px wide instead of 22% still passes `tsc`, Biome and every unit test.
+Put anything provable without a real browser in a `*.test.ts` instead. It needs
+no Tauri runtime and no SSH — the Rust suites cover that side.
 
 ## DCO sign-off (required)
 

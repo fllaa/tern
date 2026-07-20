@@ -23,7 +23,7 @@ jobs:
       - run: cargo fmt --all --check
 
   ui:
-    name: biome + vitest
+    name: biome + vitest + playwright
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +34,44 @@ jobs:
       - run: bunx biome ci
       - run: bun run --filter @tern/ui typecheck
       - run: bun run --filter @tern/ui test
-    # Linux-only on purpose: lint and unit-test results do not vary by OS, and
-    # the 3-OS `test` job already runs the UI build (which includes tsc) on
-    # every platform. This one exists for sub-minute feedback.
+
+      # Browser tier. Vitest runs under jsdom, which has no layout engine and
+      # reports every offsetWidth as 0 — the one condition under which
+      # react-resizable-panels also discards `defaultSize`. A sidebar capped at
+      # 40px therefore passed tsc, biome and the whole unit suite (c8f444a).
+      # These steps are what make that class of bug visible.
+      - name: Resolve Playwright version
+        id: playwright
+        # The cache key has to track the version: browser builds are pinned per
+        # Playwright release, so a stale cache means a browser it cannot drive.
+        run: echo "version=$(bunx playwright --version | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright.outputs.version }}
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+      - name: Install Chromium system libraries
+        # The cache restores ~/.cache/ms-playwright, but --with-deps also puts
+        # shared libraries in /usr/lib, which no cache covers. A cache hit still
+        # needs them or Chromium fails to launch.
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+      - run: bun run --filter @tern/ui test:e2e
+      - name: Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: ui/test-results/
+          retention-days: 7
+    # Linux-only on purpose: lint, unit-test and layout results do not vary by
+    # OS, and the 3-OS `test` job already runs the UI build (which includes tsc)
+    # on every platform. This one exists for fast feedback — the Chromium
+    # download is the only slow part and it is cached across runs.
 
   test:
     name: clippy + test (${{ matrix.os }})

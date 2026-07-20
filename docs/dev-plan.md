@@ -174,7 +174,7 @@ Scope cuts to resist: bookmarks, folder-sync jobs, cloud-storage backends. All p
 
 ## 5. Cross-cutting engineering practice
 
-- **Testing:** unit tests in core crates; integration tests against dockerized **OpenSSH and dropbear** (old and embedded servers are where SSH clients actually break); golden-file tests for the vault format; a manual release checklist for the 3-OS × auth-method grid.
+- **Testing:** unit tests in core crates; integration tests against dockerized **OpenSSH and dropbear** (old and embedded servers are where SSH clients actually break); golden-file tests for the vault format; a headless-Chromium layout smoke test for the UI, because jsdom has no layout engine and cannot see a broken panel (ADR-0017); a manual release checklist for the 3-OS × auth-method grid.
 - **Release rhythm:** tagged beta every 2–3 weeks from Phase 1 onward. Early users will find the Windows and Linux quirks you can't.
 - **Perf budgets:** keep the Phase 0 throughput benchmark runnable in CI so regressions are visible.
 - **Known platform pain:** WebKitGTK on Linux is Tauri's weak spot — rendering performance varies and Wayland has quirks. Test on Ubuntu LTS, Fedora, and Arch early; keep the xterm.js DOM renderer as a fallback (xterm 6 removed the canvas renderer) and document known issues honestly.
