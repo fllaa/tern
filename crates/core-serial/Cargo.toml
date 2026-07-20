@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+publish.workspace = true
 description = "Serial consoles via serialport-rs + minimal telnet (Phase 4)"
 
 [dependencies]

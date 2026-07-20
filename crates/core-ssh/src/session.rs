@@ -9,10 +9,14 @@ use std::time::Duration;
 use bytes::Bytes;
 use russh::ChannelWriteHalf;
 use russh::client::{self, AuthResult};
+#[cfg(unix)]
+use russh::keys::PublicKey;
+#[cfg(unix)]
 use russh::keys::agent::AgentIdentity;
+#[cfg(unix)]
 use russh::keys::agent::client::AgentClient;
 use russh::keys::ssh_key::HashAlg;
-use russh::keys::{PrivateKeyWithHashAlg, PublicKey, load_secret_key};
+use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -257,7 +261,20 @@ async fn authenticate(
                 .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
                 .await?
         }
-        AuthMethod::Agent => return authenticate_with_agent(handle, &user).await,
+        AuthMethod::Agent => {
+            #[cfg(unix)]
+            {
+                return authenticate_with_agent(handle, &user).await;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(SshError::Agent(
+                    "ssh-agent auth is unix-only for now; the Windows OpenSSH \
+                     named pipe and Pageant land in Phase 1"
+                        .into(),
+                ));
+            }
+        }
     };
     match result {
         AuthResult::Success => Ok(()),
@@ -269,6 +286,7 @@ async fn authenticate(
     }
 }
 
+#[cfg(unix)]
 async fn authenticate_with_agent(
     handle: &mut client::Handle<ClientHandler>,
     user: &str,

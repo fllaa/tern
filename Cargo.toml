@@ -18,6 +18,8 @@ rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/fllaa/tern"
 authors = ["Fallah Andy Prakasa <fallahandyprakasa26@gmail.com>"]
+# Nothing publishes to crates.io in Phase 0; revisit per-crate when core-* APIs stabilize.
+publish = false
 
 [workspace.dependencies]
 # Internal

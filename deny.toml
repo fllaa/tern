@@ -7,8 +7,14 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained warnings only for crates the workspace depends on directly.
+# Transitive ones (gtk3 bindings via tauri's Linux stack, unic-*/proc-macro-error
+# via tauri-codegen) are upstream's dependency tree to fix, not ours to vendor.
+unmaintained = "workspace"
 ignore = [
-  # Each entry here requires an inline `reason`.
+  { id = "RUSTSEC-2023-0071", reason = "Marvin timing sidechannel in `rsa` (via russh/ssh-key): no fixed release exists anywhere in the ecosystem. RSA publickey auth support is table stakes for an SSH client. Revisit when rsa 0.10 ships a fix." },
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml quadratic-attrs DoS, pinned <0.41 by plist<-tauri. Only parses local build-time plists, never network input. Drop when tauri/plist bump." },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader allocation DoS — same pin and same local-only exposure as RUSTSEC-2026-0194." },
 ]
 
 [licenses]
@@ -35,6 +41,9 @@ exceptions = [
 [bans]
 multiple-versions = "warn"   # start lenient; tighten to "deny" post-Phase-1
 wildcards = "deny"
+# Internal path deps (tern-proto etc.) carry no version by design; without this
+# cargo-deny reads them as wildcard requirements.
+allow-wildcard-paths = true
 deny = [
   # Enforce the pure-Rust story (docs/adr/0003). ssh2/libssh2 is the documented
   # fallback — if that fallback ever triggers, deleting these lines is the
