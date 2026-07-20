@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tern_core_pty::{LocalPty, PtyConfig};
 
+#[cfg(unix)]
 async fn read_until(pty: &mut LocalPty, needle: &str, timeout: Duration) -> String {
     let mut acc = String::new();
     let deadline = tokio::time::Instant::now() + timeout;
