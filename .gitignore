@@ -1,0 +1,17 @@
+# Rust
+/target/
+
+# JS
+node_modules/
+/ui/dist/
+
+# Tauri generated schemas
+apps/desktop/gen/schemas/
+
+# Local SSH test rig (throwaway keys, never commit)
+/.rig/
+
+# Misc
+.DS_Store
+*.log
+.env

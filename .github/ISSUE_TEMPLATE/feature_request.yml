@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an idea for Tern
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Heads-up: the v1 scope is deliberately tight (see
+        [docs/dev-plan.md](../blob/main/docs/dev-plan.md)). Out-of-scope ideas are
+        still welcome — they land in the post-1.0 parking lot rather than being
+        forgotten.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: I keep having to … / I can't …
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
