@@ -1,0 +1,21 @@
+[package]
+name = "tern-core-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Local SQLite store: hosts, folders, tags, settings (see docs/adr/0009, 0012)"
+
+[dependencies]
+# `bundled` compiles SQLite from the vendored amalgamation: one fewer moving
+# part across the three OSes, at ~30-60s of cold build time (ADR-0009).
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

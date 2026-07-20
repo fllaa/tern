@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/proto",
   "crates/core-ssh",
+  "crates/core-store",
   "crates/term-stream",
   "crates/core-pty",
   "crates/core-sftp",
@@ -25,6 +26,7 @@ publish = false
 # Internal
 tern-proto = { path = "crates/proto" }
 tern-core-ssh = { path = "crates/core-ssh" }
+tern-core-store = { path = "crates/core-store" }
 tern-term-stream = { path = "crates/term-stream" }
 tern-core-pty = { path = "crates/core-pty" }
 tern-core-sftp = { path = "crates/core-sftp" }

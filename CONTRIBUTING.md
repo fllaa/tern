@@ -49,11 +49,12 @@ CI enforces this on every pull request.
 ```
 crates/
   proto/        serde types shared across the IPC boundary
-  core-ssh/     russh session management, channels, forwards, agent
+  core-ssh/     russh session management, channels, forwards, agent, known_hosts
+  core-store/   SQLite: hosts, folders, tags, settings (no secrets, no host keys)
   term-stream/  output coalescing + flow control shared by SSH and local-PTY paths
   core-pty/     local shells via portable-pty
   core-sftp/    (Phase 3)
-  core-vault/   storage + crypto (Phase 5; OS-keyring wrapper lives here)
+  core-vault/   secrets: OS-keyring wrapper now, vault crypto in Phase 5
   core-serial/  (Phase 4)
 apps/desktop/   Tauri 2 shell — thin: wiring + capabilities only
 ui/             React + Vite + TypeScript frontend
