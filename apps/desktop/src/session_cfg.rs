@@ -16,8 +16,17 @@ use tern_core_store::Host;
 use tern_proto::OpenSessionReq;
 
 /// Build the connection config for a stored host.
-pub fn for_host(host: &Host, auth: AuthMethod, req: &OpenSessionReq) -> SessionConfig {
-    let mut cfg = SessionConfig::new(host.hostname.clone(), host.username.clone(), auth);
+///
+/// `auth` is the full chain: the host's primary method followed by its
+/// fallbacks, already resolved against the keyring by `auth::auth_for_host`.
+pub fn for_host(host: &Host, auth: Vec<AuthMethod>, req: &OpenSessionReq) -> SessionConfig {
+    let mut cfg = SessionConfig::new(
+        host.hostname.clone(),
+        host.username.clone(),
+        // Replaced wholesale below; `new` needs something to build from.
+        AuthMethod::Agent,
+    );
+    cfg.auth = auth;
     cfg.port = host.port;
 
     let o = &host.overrides;
@@ -82,7 +91,7 @@ mod tests {
     #[test]
     fn unset_overrides_leave_the_defaults_alone() {
         let host = host_with(|_| {});
-        let cfg = for_host(&host, AuthMethod::Agent, &req(None));
+        let cfg = for_host(&host, vec![AuthMethod::Agent], &req(None));
         let defaults = tern_core_ssh::SessionConfig::new("x", "y", AuthMethod::Agent);
 
         assert_eq!(cfg.host, "example.com");
@@ -102,7 +111,7 @@ mod tests {
             d.overrides.connect_timeout_secs = Some(3);
             d.overrides.window_size = Some(64 * 1024);
         });
-        let cfg = for_host(&host, AuthMethod::Agent, &req(None));
+        let cfg = for_host(&host, vec![AuthMethod::Agent], &req(None));
 
         assert_eq!(cfg.term, "xterm");
         assert_eq!(
@@ -119,7 +128,7 @@ mod tests {
         // Matching OpenSSH's ServerAliveInterval 0. Treating it as "every 0
         // seconds" would spin.
         let host = host_with(|d| d.overrides.keepalive_secs = Some(0));
-        let cfg = for_host(&host, AuthMethod::Agent, &req(None));
+        let cfg = for_host(&host, vec![AuthMethod::Agent], &req(None));
         assert_eq!(cfg.keepalive_interval, None);
     }
 
@@ -128,7 +137,7 @@ mod tests {
         // The benchmark harness drives window_size per run; it must win over
         // whatever the stored host happens to say.
         let host = host_with(|d| d.overrides.window_size = Some(64 * 1024));
-        let cfg = for_host(&host, AuthMethod::Agent, &req(Some(512 * 1024)));
+        let cfg = for_host(&host, vec![AuthMethod::Agent], &req(Some(512 * 1024)));
         assert_eq!(cfg.window_size, 512 * 1024);
     }
 }

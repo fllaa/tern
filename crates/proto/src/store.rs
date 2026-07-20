@@ -40,6 +40,9 @@ pub struct HostDto {
     pub port: u16,
     pub username: String,
     pub auth: AuthKindDto,
+    /// Methods to try after `auth` fails, in order. Empty means no fallback.
+    #[serde(default)]
+    pub auth_fallbacks: Vec<AuthKindDto>,
     /// Whether a credential is stored for this host. Deliberately a boolean —
     /// neither the secret nor its keyring account name has any business
     /// reaching the webview.
@@ -68,6 +71,9 @@ pub struct NewHostDto {
     #[serde(default)]
     pub username: String,
     pub auth: AuthKindDto,
+    /// Methods to try after `auth` fails, in order. Empty means no fallback.
+    #[serde(default)]
+    pub auth_fallbacks: Vec<AuthKindDto>,
     pub key_path: Option<String>,
     #[serde(default)]
     pub overrides: HostOverridesDto,

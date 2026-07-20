@@ -2,7 +2,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::db::Store;
 use crate::error::StoreError;
-use crate::model::{AuthKind, Host, HostFilter, HostId, HostOverrides, HostSource, NewHost, TagId};
+use crate::model::{
+    AuthKind, Host, HostFilter, HostId, HostOverrides, HostSource, NewHost, TagId,
+    decode_auth_fallbacks, encode_auth_fallbacks,
+};
 use crate::now;
 
 /// Column order shared by every `SELECT` that builds a `Host`, so `row_to_host`
@@ -10,7 +13,8 @@ use crate::now;
 const HOST_COLUMNS: &str = "id, folder_id, name, hostname, port, username, auth_method, \
      secret_ref, key_path, term, keepalive_secs, keepalive_max, connect_timeout_secs, \
      window_size, reconnect_enabled, reconnect_max_attempts, proxy_jump, source, \
-     source_alias, color, notes, last_connected_at, connect_count, created_at, updated_at";
+     source_alias, color, notes, last_connected_at, connect_count, created_at, updated_at, \
+     auth_fallbacks";
 
 pub struct HostRepo<'a> {
     store: &'a Store,
@@ -52,6 +56,9 @@ fn row_to_host(row: &Row<'_>) -> rusqlite::Result<Host> {
         connect_count: row.get(22)?,
         created_at: row.get(23)?,
         updated_at: row.get(24)?,
+        // Appended to HOST_COLUMNS rather than slotted in beside `auth`, so
+        // every index above keeps its meaning.
+        auth_fallbacks: decode_auth_fallbacks(row.get::<_, Option<String>>(25)?.as_deref()),
         // Filled by `attach_tags`; a JOIN here would fan out the host rows.
         tags: Vec::new(),
     })
@@ -77,12 +84,12 @@ impl<'a> HostRepo<'a> {
                 folder_id, name, hostname, port, username, auth_method, secret_ref, key_path,
                 term, keepalive_secs, keepalive_max, connect_timeout_secs, window_size,
                 reconnect_enabled, reconnect_max_attempts, proxy_jump, source, source_alias,
-                color, notes, created_at, updated_at
+                color, notes, created_at, updated_at, auth_fallbacks
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21, ?21
+                ?19, ?20, ?21, ?21, ?22
              )",
             params![
                 draft.folder_id,
@@ -106,6 +113,7 @@ impl<'a> HostRepo<'a> {
                 draft.color,
                 draft.notes,
                 ts,
+                encode_auth_fallbacks(&draft.auth_fallbacks),
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -182,7 +190,7 @@ impl<'a> HostRepo<'a> {
                 keepalive_secs = ?11, keepalive_max = ?12, connect_timeout_secs = ?13,
                 window_size = ?14, reconnect_enabled = ?15, reconnect_max_attempts = ?16,
                 proxy_jump = ?17, source = ?18, source_alias = ?19, color = ?20,
-                notes = ?21, updated_at = ?22
+                notes = ?21, updated_at = ?22, auth_fallbacks = ?23
              WHERE id = ?1",
             params![
                 host.id,
@@ -207,6 +215,7 @@ impl<'a> HostRepo<'a> {
                 host.color,
                 host.notes,
                 now(),
+                encode_auth_fallbacks(&host.auth_fallbacks),
             ],
         )?;
         if changed == 0 {

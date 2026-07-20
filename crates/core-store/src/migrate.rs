@@ -14,8 +14,14 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// `(version, name, sql)`, ascending. Append only.
-const MIGRATIONS: &[(i64, &str, &str)] =
-    &[(1, "init", include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "init", include_str!("../migrations/0001_init.sql")),
+    (
+        2,
+        "auth_fallbacks",
+        include_str!("../migrations/0002_auth_fallbacks.sql"),
+    ),
+];
 
 /// Highest schema version this binary knows how to produce.
 pub fn target_version() -> i64 {

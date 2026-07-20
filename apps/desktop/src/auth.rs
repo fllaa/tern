@@ -87,7 +87,9 @@ fn read_secret(account: &str) -> (Option<String>, Option<String>) {
 /// The auth to attempt, plus anything the user needs told about how it was
 /// assembled.
 pub struct ResolvedAuth {
-    pub method: AuthMethod,
+    /// The host's primary method followed by its configured fallbacks, in the
+    /// order `core-ssh` should try them.
+    pub methods: Vec<AuthMethod>,
     /// Set when a credential was expected but could not be read. Carried
     /// alongside rather than turned into an error, because the connection
     /// should still be attempted — an agent or a key with no passphrase may
@@ -115,31 +117,77 @@ pub fn auth_for_host(host: &Host) -> ResolvedAuth {
         Some(account) => read_secret(account),
     };
 
-    let method = match host.auth {
+    // Every step of the chain shares the host's single key_path and secret_ref,
+    // which is what lets the fallbacks be stored as an ordering over kinds
+    // rather than as rows with their own credentials.
+    let build = |kind: AuthKind| match kind {
         AuthKind::Agent => AuthMethod::Agent,
-        AuthKind::Password => AuthMethod::password(stored.unwrap_or_default()),
+        AuthKind::Password => AuthMethod::password(stored.clone().unwrap_or_default()),
         AuthKind::KeyFile => {
-            let path = host.key_path.clone().unwrap_or_default();
-            AuthMethod::key_file(path, stored)
+            AuthMethod::key_file(host.key_path.clone().unwrap_or_default(), stored.clone())
         }
     };
 
-    ResolvedAuth { method, degraded }
+    let mut methods = vec![build(host.auth)];
+    // A fallback repeating the primary would spend an auth attempt proving the
+    // same thing twice, and against a server counting attempts that is not free.
+    methods.extend(
+        host.auth_fallbacks
+            .iter()
+            .filter(|k| **k != host.auth)
+            .map(|k| build(*k)),
+    );
+
+    ResolvedAuth { methods, degraded }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{account_for, passphrase_account, password_account};
+    use super::{account_for, auth_for_host, passphrase_account, password_account};
     use tern_core_store::{AuthKind, NewHost};
 
     fn host_with(auth: AuthKind) -> tern_core_store::Host {
+        host_with_fallbacks(auth, &[])
+    }
+
+    fn host_with_fallbacks(auth: AuthKind, fallbacks: &[AuthKind]) -> tern_core_store::Host {
         // Round-tripping through an in-memory store keeps this honest about
         // the real record shape rather than a hand-built struct.
         let store = tern_core_store::Store::open_in_memory().expect("store");
         let mut draft = NewHost::manual("h", "example.com");
         draft.auth = auth;
+        draft.auth_fallbacks = fallbacks.to_vec();
         let id = store.hosts().create(&draft).expect("create");
         store.hosts().get(id).expect("get").expect("exists")
+    }
+
+    /// The chain is the primary method followed by its fallbacks, in order.
+    #[test]
+    fn the_chain_leads_with_the_primary_method() {
+        let host = host_with_fallbacks(AuthKind::Agent, &[AuthKind::Password]);
+        let resolved = auth_for_host(&host);
+        assert_eq!(resolved.methods.len(), 2);
+        assert!(matches!(
+            resolved.methods[0],
+            tern_core_ssh::AuthMethod::Agent
+        ));
+        assert!(matches!(
+            resolved.methods[1],
+            tern_core_ssh::AuthMethod::Password(_)
+        ));
+    }
+
+    /// A fallback repeating the primary would spend an auth attempt proving the
+    /// same thing twice, which against a server counting attempts is not free.
+    #[test]
+    fn a_fallback_repeating_the_primary_is_dropped() {
+        let host = host_with_fallbacks(AuthKind::Password, &[AuthKind::Password]);
+        assert_eq!(auth_for_host(&host).methods.len(), 1);
+    }
+
+    #[test]
+    fn a_host_without_fallbacks_yields_a_single_method() {
+        assert_eq!(auth_for_host(&host_with(AuthKind::Agent)).methods.len(), 1);
     }
 
     #[test]

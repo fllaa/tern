@@ -60,7 +60,7 @@ CREATE TABLE hosts (
   connect_count          INTEGER NOT NULL DEFAULT 0,
   created_at             INTEGER NOT NULL,
   updated_at             INTEGER NOT NULL
-);
+, auth_fallbacks TEXT);
 CREATE TABLE schema_migrations (
   version    INTEGER PRIMARY KEY,
   name       TEXT    NOT NULL,
@@ -77,4 +77,3 @@ CREATE TABLE tags (
   color      TEXT,
   created_at INTEGER NOT NULL
 );
-

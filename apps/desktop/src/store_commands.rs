@@ -91,6 +91,11 @@ pub fn host_dto(host: &tern_core_store::Host) -> HostDto {
         port: host.port,
         username: host.username.clone(),
         auth: auth_kind_dto(host.auth),
+        auth_fallbacks: host
+            .auth_fallbacks
+            .iter()
+            .map(|k| auth_kind_dto(*k))
+            .collect(),
         has_secret: host.secret_ref.is_some(),
         key_path: host.key_path.clone(),
         overrides: overrides_dto(&host.overrides),
@@ -147,6 +152,7 @@ pub async fn create_host(
             port: host.port,
             username: host.username,
             auth: auth_kind(host.auth),
+            auth_fallbacks: host.auth_fallbacks.iter().map(|k| auth_kind(*k)).collect(),
             secret_ref: None,
             key_path: host.key_path,
             overrides: overrides(&host.overrides),
@@ -197,6 +203,7 @@ pub async fn update_host(
         existing.port = host.port;
         existing.username = host.username;
         existing.auth = auth_kind(host.auth);
+        existing.auth_fallbacks = host.auth_fallbacks.iter().map(|k| auth_kind(*k)).collect();
         existing.key_path = host.key_path;
         existing.overrides = overrides(&host.overrides);
         existing.proxy_jump = host.proxy_jump;

@@ -410,7 +410,7 @@ pub async fn open_session(
             if let Some(note) = resolved.degraded {
                 let _ = events.send(SessionEvent::Warning { message: note });
             }
-            let ssh_cfg = crate::session_cfg::for_host(&host, resolved.method, &req);
+            let ssh_cfg = crate::session_cfg::for_host(&host, resolved.methods, &req);
             connect_ssh(
                 &state,
                 &id,

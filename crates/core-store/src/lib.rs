@@ -31,7 +31,7 @@ pub use hosts::HostRepo;
 pub use migrate::target_version as schema_target_version;
 pub use model::{
     AuthKind, Folder, FolderId, Host, HostFilter, HostId, HostOverrides, HostSource, NewHost, Tag,
-    TagId,
+    TagId, decode_auth_fallbacks, encode_auth_fallbacks,
 };
 pub use settings::{
     KEY_HASH_KNOWN_HOSTS, KEY_KNOWN_HOSTS_IMPORT_OFFERED, KEY_RECONNECT_ENABLED,

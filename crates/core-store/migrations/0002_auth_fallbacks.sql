@@ -1,0 +1,16 @@
+-- Ordered auth fallbacks: what to try after `auth` if it fails.
+--
+-- A comma-separated list of auth_method values rather than a child table. The
+-- chain orders the *kinds* a host may try, and every step reuses that host's
+-- single key_path and secret_ref — so there is no per-step data for rows to
+-- hold. A child table would buy per-step keys, which is a Phase 2 concern
+-- (multiple identities per host) and not worth the join today.
+--
+-- NULL or empty means "no fallback", which is the existing behaviour and stays
+-- the default: hosts created before this migration keep trying exactly one
+-- method, and nothing about their connections changes.
+--
+-- No CHECK, for the same reason auth_method has none: keyboard-interactive is a
+-- known future value and SQLite cannot alter a CHECK without rebuilding the
+-- table. Validation lives in the model.
+ALTER TABLE hosts ADD COLUMN auth_fallbacks TEXT;

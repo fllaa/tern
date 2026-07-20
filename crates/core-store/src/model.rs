@@ -45,6 +45,36 @@ impl TryFrom<&str> for AuthKind {
     }
 }
 
+/// Encode a fallback chain for storage. Empty yields `None`, so "no fallback"
+/// is a SQL NULL rather than an empty string that reads as data.
+#[must_use]
+pub fn encode_auth_fallbacks(kinds: &[AuthKind]) -> Option<String> {
+    if kinds.is_empty() {
+        return None;
+    }
+    Some(
+        kinds
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
+/// Decode a stored fallback chain.
+///
+/// Unknown entries are dropped rather than failing the read. A host row is not
+/// worth making unreadable over one unrecognised fallback — the likely cause is
+/// a newer build that wrote a method this one does not have, and losing the
+/// fallback degrades to the primary method rather than to an unusable record.
+#[must_use]
+pub fn decode_auth_fallbacks(raw: Option<&str>) -> Vec<AuthKind> {
+    raw.unwrap_or_default()
+        .split(',')
+        .filter_map(|s| AuthKind::try_from(s.trim()).ok())
+        .collect()
+}
+
 /// Where a host record came from. Drives idempotent re-import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +132,11 @@ pub struct Host {
     pub port: u16,
     pub username: String,
     pub auth: AuthKind,
+    /// Methods to try after `auth` fails, in order. Empty means no fallback,
+    /// which is the default and matches every host created before fallbacks
+    /// existed.
+    #[serde(default)]
+    pub auth_fallbacks: Vec<AuthKind>,
     /// Keyring *account* string, never a credential. `None` = prompt each time.
     pub secret_ref: Option<String>,
     pub key_path: Option<String>,
@@ -129,6 +164,8 @@ pub struct NewHost {
     pub port: u16,
     pub username: String,
     pub auth: AuthKind,
+    #[serde(default)]
+    pub auth_fallbacks: Vec<AuthKind>,
     pub secret_ref: Option<String>,
     pub key_path: Option<String>,
     #[serde(default)]
@@ -155,6 +192,7 @@ impl NewHost {
             port: 22,
             username: String::new(),
             auth: AuthKind::Agent,
+            auth_fallbacks: Vec::new(),
             secret_ref: None,
             key_path: None,
             overrides: HostOverrides::default(),

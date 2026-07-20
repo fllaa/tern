@@ -147,6 +147,11 @@ pub fn apply(store: &Store, chosen: &[Candidate]) -> Result<ImportOutcome, Store
                 port: c.port,
                 username: c.username.clone(),
                 auth: c.auth,
+                // ssh_config has no fallback concept to import: OpenSSH derives
+                // its own method order from the client config, so inventing a
+                // chain here would attribute a choice to the file that the file
+                // never made.
+                auth_fallbacks: Vec::new(),
                 secret_ref: None,
                 key_path: c.key_path.clone(),
                 overrides: c.overrides.clone(),

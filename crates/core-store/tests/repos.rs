@@ -407,3 +407,53 @@ fn setting_the_same_key_twice_updates_rather_than_erroring() {
     assert_eq!(s.settings().get::<u32>("k").expect("get"), Some(2));
     assert_eq!(s.settings().all_raw().expect("all").len(), 1);
 }
+
+#[test]
+fn auth_fallbacks_round_trip_through_create_and_update() {
+    let s = store();
+    let mut draft = NewHost::manual("h", "example.com");
+    draft.auth = AuthKind::Agent;
+    draft.auth_fallbacks = vec![AuthKind::KeyFile, AuthKind::Password];
+    let id = s.hosts().create(&draft).expect("create");
+
+    let mut host = s.hosts().get(id).expect("get").expect("exists");
+    assert_eq!(
+        host.auth_fallbacks,
+        vec![AuthKind::KeyFile, AuthKind::Password],
+        "order is the whole point of the chain and must survive storage"
+    );
+
+    host.auth_fallbacks = vec![AuthKind::Password];
+    s.hosts().update(&host).expect("update");
+    let reread = s.hosts().get(id).expect("get").expect("exists");
+    assert_eq!(reread.auth_fallbacks, vec![AuthKind::Password]);
+}
+
+/// Hosts created before fallbacks existed — and every host created without
+/// them since — must keep trying exactly one method.
+#[test]
+fn a_host_without_fallbacks_reads_back_with_an_empty_chain() {
+    let s = store();
+    let id = s
+        .hosts()
+        .create(&NewHost::manual("h", "example.com"))
+        .expect("create");
+    let host = s.hosts().get(id).expect("get").expect("exists");
+    assert!(host.auth_fallbacks.is_empty());
+}
+
+/// A fallback this build does not recognise costs the fallback, not the host.
+/// The likely writer is a newer version, and an unreadable row would be a far
+/// worse outcome than a shorter chain.
+#[test]
+fn an_unknown_stored_fallback_is_dropped_rather_than_failing_the_read() {
+    use tern_core_store::{decode_auth_fallbacks, encode_auth_fallbacks};
+
+    assert_eq!(
+        decode_auth_fallbacks(Some("agent,keyboard_interactive,password")),
+        vec![AuthKind::Agent, AuthKind::Password]
+    );
+    assert!(decode_auth_fallbacks(None).is_empty());
+    // Empty encodes to NULL, so "no fallback" is never stored as data.
+    assert_eq!(encode_auth_fallbacks(&[]), None);
+}
