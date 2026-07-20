@@ -22,3 +22,4 @@ workspace = true
 [dev-dependencies]
 crossterm = "0.29.0"
 rpassword = "7.5.4"
+tern-term-stream.workspace = true

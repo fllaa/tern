@@ -8,6 +8,7 @@
 //! This crate must never depend on `tauri`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -212,5 +213,75 @@ impl LocalPty {
     /// Wait for the child to exit and return its exit code.
     pub async fn wait_exit(self) -> Option<u32> {
         self.exit.await.ok()
+    }
+}
+
+/// Read side of a split [`LocalPty`] — owned by the output pump.
+pub struct PtyOutput {
+    output: mpsc::Receiver<Bytes>,
+    exit: oneshot::Receiver<u32>,
+}
+
+impl PtyOutput {
+    /// Next chunk of terminal output; `None` once the PTY closed.
+    pub async fn recv(&mut self) -> Option<Bytes> {
+        self.output.recv().await
+    }
+
+    /// After `recv` returns `None`, the child's exit code if observed.
+    pub async fn exit_code(self) -> Option<u32> {
+        self.exit.await.ok()
+    }
+}
+
+/// Cloneable control side of a split [`LocalPty`].
+#[derive(Clone)]
+pub struct PtyControl {
+    writer: mpsc::Sender<Vec<u8>>,
+    // std Mutex: MasterPty isn't Sync; resize/get_size are quick sync calls.
+    master: Arc<std::sync::Mutex<Box<dyn MasterPty + Send>>>,
+}
+
+impl PtyControl {
+    /// Send input (keystrokes) to the child.
+    pub async fn write(&self, data: Vec<u8>) -> Result<(), PtyError> {
+        self.writer
+            .send(data)
+            .await
+            .map_err(|_| PtyError::WriterClosed)
+    }
+
+    /// Resize the PTY.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| PtyError::Pty("poisoned".into()))?;
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| PtyError::Pty(e.to_string()))
+    }
+}
+
+impl LocalPty {
+    /// Split into an owned read half and a cloneable control half, so a pump
+    /// task can own the output while commands write/resize concurrently.
+    #[must_use]
+    pub fn split(self) -> (PtyOutput, PtyControl) {
+        (
+            PtyOutput {
+                output: self.output,
+                exit: self.exit,
+            },
+            PtyControl {
+                writer: self.writer,
+                master: Arc::new(std::sync::Mutex::new(self.master)),
+            },
+        )
     }
 }

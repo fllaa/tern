@@ -322,3 +322,79 @@ async fn authenticate_with_agent(
     }
     Err(SshError::AuthFailed(format!("agent auth: {last_failure}")))
 }
+
+/// Read side of a split [`ShellChannel`] — owned by the output pump.
+pub struct ShellOutput {
+    output: mpsc::Receiver<Bytes>,
+    exit: oneshot::Receiver<Option<u32>>,
+}
+
+impl ShellOutput {
+    /// Next chunk of terminal output; `None` when the channel closed.
+    pub async fn recv(&mut self) -> Option<Bytes> {
+        self.output.recv().await
+    }
+
+    /// After `recv` returns `None`, the exit status if the server sent one.
+    pub async fn exit_status(self) -> Option<u32> {
+        self.exit.await.unwrap_or(None)
+    }
+}
+
+/// Cloneable control side of a split [`ShellChannel`].
+#[derive(Clone)]
+pub struct ShellControl {
+    write: Arc<ChannelWriteHalf<client::Msg>>,
+    pause: watch::Sender<bool>,
+}
+
+impl ShellControl {
+    /// Send input (keystrokes) to the remote shell.
+    pub async fn write(&self, data: impl Into<Bytes> + Send) -> Result<(), SshError> {
+        self.write.data_bytes(data).await?;
+        Ok(())
+    }
+
+    /// Propagate a terminal resize to the remote PTY.
+    pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), SshError> {
+        self.write
+            .window_change(u32::from(cols), u32::from(rows), 0, 0)
+            .await?;
+        Ok(())
+    }
+
+    /// Stop consuming output (engages end-to-end backpressure).
+    pub fn pause(&self) {
+        let _ = self.pause.send(true);
+    }
+
+    /// Resume consuming output.
+    pub fn resume(&self) {
+        let _ = self.pause.send(false);
+    }
+
+    /// Ask the server to close the channel; the output side observes `Close`.
+    pub async fn close(&self) -> Result<(), SshError> {
+        let _ = self.write.eof().await;
+        self.write.close().await?;
+        Ok(())
+    }
+}
+
+impl ShellChannel {
+    /// Split into an owned read half and a cloneable control half, so a pump
+    /// task can own the output while commands write/resize/pause concurrently.
+    #[must_use]
+    pub fn split(self) -> (ShellOutput, ShellControl) {
+        (
+            ShellOutput {
+                output: self.output,
+                exit: self.exit,
+            },
+            ShellControl {
+                write: Arc::new(self.write),
+                pause: self.pause,
+            },
+        )
+    }
+}

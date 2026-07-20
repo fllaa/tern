@@ -4974,11 +4974,16 @@ dependencies = [
 name = "tern"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tern-core-pty",
+ "tern-core-ssh",
  "tern-proto",
+ "tern-term-stream",
+ "tokio",
 ]
 
 [[package]]
@@ -5007,6 +5012,7 @@ dependencies = [
  "crossterm",
  "rpassword",
  "russh",
+ "tern-term-stream",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -5032,6 +5038,10 @@ dependencies = [
 [[package]]
 name = "tern-term-stream"
 version = "0.1.0"
+dependencies = [
+ "bytes",
+ "tokio",
+]
 
 [[package]]
 name = "thiserror"

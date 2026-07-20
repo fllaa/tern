@@ -14,4 +14,7 @@ mod session;
 
 pub use config::{AuthMethod, SessionConfig};
 pub use error::SshError;
-pub use session::{HostKeyCallback, HostKeyInfo, ShellChannel, SshSession, accept_any_host_key};
+pub use session::{
+    HostKeyCallback, HostKeyInfo, ShellChannel, ShellControl, ShellOutput, SshSession,
+    accept_any_host_key,
+};
