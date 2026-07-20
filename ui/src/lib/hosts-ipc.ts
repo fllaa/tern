@@ -162,3 +162,61 @@ export const removeKnownHost = (host: string, port: number): Promise<number> =>
  *  The source is opened read-only and never modified. */
 export const importKnownHosts = (source?: string): Promise<KnownHostsImportReport> =>
   invoke("import_known_hosts", { source: source ?? null });
+
+// ── ssh_config import ────────────────────────────────────────────────────
+
+export interface SshConfigCandidate {
+  alias: string;
+  hostname: string;
+  port: number;
+  username: string;
+  auth: AuthKind;
+  keyPath: string | null;
+  proxyJump: string | null;
+  overrides: HostOverrides;
+  /** "new" or "update" — what importing would do with this row. */
+  disposition: "new" | "update";
+}
+
+/** Something the importer could not model. Surfaced, never silently dropped. */
+export type SshConfigWarning =
+  | { kind: "match_unsupported"; file: string; line: number }
+  | { kind: "include_cycle"; file: string; line: number }
+  | { kind: "include_unreadable"; file: string; line: number; pattern: string }
+  | { kind: "unsupported_keyword"; file: string; line: number; keyword: string };
+
+export interface SshConfigScan {
+  source: string;
+  candidates: SshConfigCandidate[];
+  warnings: SshConfigWarning[];
+}
+
+export interface SshConfigImportResult {
+  created: number;
+  updated: number;
+}
+
+/** Preview an import. Writes nothing. */
+export const scanSshConfig = (path?: string): Promise<SshConfigScan> =>
+  invoke("scan_ssh_config", { path: path ?? null });
+
+/** Commit the chosen aliases. Idempotent — re-import updates in place. */
+export const importSshConfig = (
+  aliases: string[],
+  path?: string,
+): Promise<SshConfigImportResult> =>
+  invoke("import_ssh_config", { aliases, path: path ?? null });
+
+/** Human-readable summary of a warning, for the preview dialog. */
+export function describeWarning(w: SshConfigWarning): string {
+  switch (w.kind) {
+    case "match_unsupported":
+      return `${w.file}:${w.line} — Match block not evaluated; the hosts it configures were skipped`;
+    case "include_cycle":
+      return `${w.file} — Include loop, stopped following`;
+    case "include_unreadable":
+      return `${w.file}:${w.line} — Include "${w.pattern}" matched nothing`;
+    case "unsupported_keyword":
+      return `${w.file}:${w.line} — ${w.keyword} not imported`;
+  }
+}

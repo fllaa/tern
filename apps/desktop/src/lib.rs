@@ -62,6 +62,9 @@ pub fn run() {
             store_commands::list_known_hosts,
             store_commands::remove_known_host,
             store_commands::import_known_hosts,
+            // ssh_config import
+            store_commands::scan_ssh_config,
+            store_commands::import_ssh_config,
             // benchmark harness (Phase 0; kept runnable so regressions show)
             commands::bench_reset,
             commands::bench_stats,

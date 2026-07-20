@@ -14,7 +14,8 @@ use tern_core_ssh::KnownHostsFile;
 use tern_core_store::{AuthKind, HostFilter, HostOverrides, NewHost, Store};
 use tern_proto::{
     AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KnownHostEntryDto,
-    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, TagDto,
+    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, SshConfigCandidateDto,
+    SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 
 use crate::auth;
@@ -497,4 +498,111 @@ fn default_user_known_hosts() -> std::path::PathBuf {
             || std::path::PathBuf::from(".ssh/known_hosts"),
             |home| std::path::PathBuf::from(home).join(".ssh/known_hosts"),
         )
+}
+
+// ── ssh_config import ────────────────────────────────────────────────────
+
+fn warning_dto(w: &tern_core_store::SshConfigWarning) -> SshConfigWarningDto {
+    use tern_core_store::SshConfigWarning as W;
+    match w {
+        W::MatchUnsupported { file, line } => SshConfigWarningDto::MatchUnsupported {
+            file: file.clone(),
+            line: *line,
+        },
+        W::IncludeCycle { file, line } => SshConfigWarningDto::IncludeCycle {
+            file: file.clone(),
+            line: *line,
+        },
+        W::IncludeUnreadable {
+            file,
+            line,
+            pattern,
+        } => SshConfigWarningDto::IncludeUnreadable {
+            file: file.clone(),
+            line: *line,
+            pattern: pattern.clone(),
+        },
+        W::UnsupportedKeyword {
+            file,
+            line,
+            keyword,
+        } => SshConfigWarningDto::UnsupportedKeyword {
+            file: file.clone(),
+            line: *line,
+            keyword: keyword.clone(),
+        },
+    }
+}
+
+fn candidate_dto(c: &tern_core_store::SshConfigCandidate) -> SshConfigCandidateDto {
+    SshConfigCandidateDto {
+        alias: c.alias.clone(),
+        hostname: c.hostname.clone(),
+        port: c.port,
+        username: c.username.clone(),
+        auth: auth_kind_dto(c.auth),
+        key_path: c.key_path.clone(),
+        proxy_jump: c.proxy_jump.clone(),
+        overrides: overrides_dto(&c.overrides),
+        disposition: match c.disposition {
+            tern_core_store::SshConfigDisposition::New => "new".into(),
+            tern_core_store::SshConfigDisposition::Update => "update".into(),
+        },
+    }
+}
+
+/// Read `~/.ssh/config` and report what importing it would do.
+///
+/// Writes nothing — the UI shows a checklist and the user commits explicitly,
+/// so "cancel" genuinely means cancel.
+#[tauri::command]
+pub async fn scan_ssh_config(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<SshConfigScanDto, String> {
+    let path = path.map_or_else(
+        tern_core_store::default_ssh_config_path,
+        std::path::PathBuf::from,
+    );
+    blocking(&state, move |store| {
+        let scan = tern_core_store::scan_ssh_config(&path, &store).map_err(|e| e.to_string())?;
+        Ok(SshConfigScanDto {
+            source: scan.source,
+            candidates: scan.candidates.iter().map(candidate_dto).collect(),
+            warnings: scan.warnings.iter().map(warning_dto).collect(),
+        })
+    })
+    .await
+}
+
+/// Commit the chosen candidates. Idempotent by alias, so re-importing after
+/// editing the file updates rather than duplicating.
+#[tauri::command]
+pub async fn import_ssh_config(
+    state: State<'_, AppState>,
+    aliases: Vec<String>,
+    path: Option<String>,
+) -> Result<SshConfigImportResultDto, String> {
+    let path = path.map_or_else(
+        tern_core_store::default_ssh_config_path,
+        std::path::PathBuf::from,
+    );
+    blocking(&state, move |store| {
+        // Re-scan rather than trusting candidates round-tripped through the
+        // webview: the file is the source of truth, and this way the UI cannot
+        // submit a host it never actually read.
+        let scan = tern_core_store::scan_ssh_config(&path, &store).map_err(|e| e.to_string())?;
+        let chosen: Vec<_> = scan
+            .candidates
+            .into_iter()
+            .filter(|c| aliases.contains(&c.alias))
+            .collect();
+        let outcome =
+            tern_core_store::apply_ssh_config(&store, &chosen).map_err(|e| e.to_string())?;
+        Ok(SshConfigImportResultDto {
+            created: outcome.created,
+            updated: outcome.updated,
+        })
+    })
+    .await
 }

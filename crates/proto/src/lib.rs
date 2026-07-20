@@ -13,7 +13,8 @@ mod store;
 
 pub use store::{
     AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KnownHostEntryDto,
-    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, TagDto,
+    KnownHostsImportReportDto, NewHostDto, SecretUpdateDto, SshConfigCandidateDto,
+    SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 
 /// Opaque identifier for a terminal session (SSH or local PTY).

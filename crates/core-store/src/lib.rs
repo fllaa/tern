@@ -21,6 +21,7 @@ mod hosts;
 mod migrate;
 mod model;
 mod settings;
+mod ssh_config;
 mod tags;
 
 pub use db::Store;
@@ -35,6 +36,11 @@ pub use model::{
 pub use settings::{
     KEY_HASH_KNOWN_HOSTS, KEY_KNOWN_HOSTS_IMPORT_OFFERED, KEY_RECONNECT_ENABLED,
     KEY_RECONNECT_MAX_ATTEMPTS, SettingsRepo,
+};
+pub use ssh_config::{
+    Candidate as SshConfigCandidate, Disposition as SshConfigDisposition, ImportOutcome,
+    Scan as SshConfigScan, Warning as SshConfigWarning, apply as apply_ssh_config,
+    default_path as default_ssh_config_path, scan as scan_ssh_config,
 };
 pub use tags::TagRepo;
 

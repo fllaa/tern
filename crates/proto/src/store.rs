@@ -185,3 +185,63 @@ mod tests {
         assert!(json.contains("keepaliveSecs"), "got {json}");
     }
 }
+
+// ── ssh_config import ────────────────────────────────────────────────────
+
+/// One host the importer found, plus what committing it would do.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigCandidateDto {
+    pub alias: String,
+    pub hostname: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: AuthKindDto,
+    pub key_path: Option<String>,
+    pub proxy_jump: Option<String>,
+    #[serde(default)]
+    pub overrides: HostOverridesDto,
+    /// `"new"` or `"update"` — what `import_ssh_config` would do with it.
+    pub disposition: String,
+}
+
+/// Something the importer could not model. Surfaced rather than dropped: the
+/// promise that bounds this feature's scope is that you can see what did not
+/// come across.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SshConfigWarningDto {
+    MatchUnsupported {
+        file: String,
+        line: usize,
+    },
+    IncludeCycle {
+        file: String,
+        line: usize,
+    },
+    IncludeUnreadable {
+        file: String,
+        line: usize,
+        pattern: String,
+    },
+    UnsupportedKeyword {
+        file: String,
+        line: usize,
+        keyword: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigScanDto {
+    pub source: String,
+    pub candidates: Vec<SshConfigCandidateDto>,
+    pub warnings: Vec<SshConfigWarningDto>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigImportResultDto {
+    pub created: usize,
+    pub updated: usize,
+}

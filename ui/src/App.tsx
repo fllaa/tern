@@ -11,6 +11,7 @@ import {
   ChangedKeyDialog,
   FirstContactDialog,
 } from "./components/HostKeyDialog";
+import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { type TerminalReady, TerminalView } from "./components/TerminalView";
 import {
   type AuthKind,
@@ -55,6 +56,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [prompt, setPrompt] = useState<HostKeyPrompt | null>(null);
   const [changed, setChanged] = useState<ChangedKey | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const readyRef = useRef<TerminalReady | null>(null);
   const sessionRef = useRef<TermSession | null>(null);
@@ -257,6 +259,13 @@ export default function App() {
         </ul>
         <button
           type="button"
+          className={`${btn} mx-2`}
+          onClick={() => setImporting(true)}
+        >
+          import ~/.ssh/config
+        </button>
+        <button
+          type="button"
           className={`${btn} m-2`}
           onClick={() => {
             void importKnownHosts()
@@ -376,6 +385,16 @@ export default function App() {
       )}
 
       {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
+      {importing && (
+        <SshConfigImportDialog
+          onClose={() => setImporting(false)}
+          onImported={(created: number, updated: number) => {
+            setImporting(false);
+            setNotice(`imported ${created} new host(s), updated ${updated}`);
+            void refresh(query);
+          }}
+        />
+      )}
       {changed && (
         <ChangedKeyDialog
           detail={changed}
