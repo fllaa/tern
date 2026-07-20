@@ -1,72 +1,70 @@
-// M1 product shell: a real host list backed by SQLite, connecting through
-// Target::SavedHost so no credential crosses the IPC boundary.
-//
-// Deliberately plain markup. The LiltUI product shell — sidebar tree, tabs,
-// command palette — lands in the next milestone; this exists so the store,
-// keyring auth, and host-key trust can be exercised end to end first.
+// Product shell: resizable sidebar, session tabs, pooled terminals.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+
 import {
   type ChangedKey,
   ChangedKeyDialog,
   FirstContactDialog,
 } from "./components/HostKeyDialog";
+import { HostNewDialog } from "./components/HostNewDialog";
+import { HostSidebar } from "./components/HostSidebar";
+import { PasteWarningDialog } from "./components/PasteWarningDialog";
+import { SessionTabs } from "./components/SessionTabs";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
-import { type TerminalReady, TerminalView } from "./components/TerminalView";
+import { TerminalMount } from "./components/TerminalMount";
 import {
-  type AuthKind,
-  createHost,
-  deleteHost,
+  type Folder,
   type Host,
-  importKnownHosts,
+  listFolders,
   listHosts,
   removeKnownHost,
 } from "./lib/hosts-ipc";
-import { type HostKeyPrompt, TermSession } from "./lib/ipc";
-import { useSessionStore } from "./store/session";
-
-interface Draft {
-  name: string;
-  hostname: string;
-  port: string;
-  username: string;
-  auth: AuthKind;
-  keyPath: string;
-  secret: string;
-}
-
-const EMPTY_DRAFT: Draft = {
-  name: "",
-  hostname: "",
-  port: "22",
-  username: "",
-  auth: "agent",
-  keyPath: "",
-  secret: "",
-};
+import type { HostKeyPrompt } from "./lib/ipc";
+import * as controller from "./session/controller";
+import { useSessions } from "./store/sessions";
+import { assessPaste } from "./terminal/clipboard";
+import * as pool from "./terminal/pool";
 
 export default function App() {
-  const status = useSessionStore((s) => s.status);
-  const setStatus = useSessionStore((s) => s.setStatus);
-
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [query, setQuery] = useState("");
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [activeHost, setActiveHost] = useState<Host | null>(null);
   const [notice, setNotice] = useState("");
+  const [flowLine, setFlowLine] = useState("");
+
+  const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [prompt, setPrompt] = useState<HostKeyPrompt | null>(null);
   const [changed, setChanged] = useState<ChangedKey | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [pastePending, setPastePending] = useState<{
+    text: string;
+    lineCount: number;
+    tabId: string;
+  } | null>(null);
 
-  const readyRef = useRef<TerminalReady | null>(null);
-  const sessionRef = useRef<TermSession | null>(null);
-  // The prompt is answered from a dialog, so the connect's decision has to
-  // travel back out of React state to the promise `TermSession.open` awaits.
+  const order = useSessions((s) => s.order);
+  const activeId = useSessions((s) => s.activeId);
+  const byId = useSessions((s) => s.byId);
+  const openTab = useSessions((s) => s.openTab);
+  const closeTab = useSessions((s) => s.closeTab);
+
+  // The host-key prompt is answered from a dialog, so the decision has to
+  // travel back out of React state to the promise the connect is awaiting.
   const decideRef = useRef<((accept: boolean) => void) | null>(null);
 
   const refresh = useCallback(async (q: string) => {
     try {
-      setHosts(await listHosts({ query: q || null }));
+      const [h, f] = await Promise.all([listHosts({ query: q || null }), listFolders()]);
+      setHosts(h);
+      setFolders(f);
     } catch (err) {
       setNotice(`could not load hosts: ${String(err)}`);
     }
@@ -76,69 +74,90 @@ export default function App() {
     void refresh(query);
   }, [query, refresh]);
 
-  const connect = useCallback(
-    async (host: Host) => {
-      const ready = readyRef.current;
-      if (!ready || sessionRef.current) return;
-      setStatus("connecting");
-      setNotice("");
-      try {
-        const session = await TermSession.open(
-          ready.term,
-          {
-            // No credential here — the id is enough, and Rust resolves the
-            // secret from the keyring.
-            target: { kind: "saved_host", host_id: host.id },
-            cols: ready.term.cols,
-            rows: ready.term.rows,
-          },
-          (ev) => {
-            if (ev.event === "exited") {
-              sessionRef.current = null;
-              setActiveHost(null);
-              setStatus("idle");
-              setNotice(`session ended (code ${ev.code ?? "?"})`);
-            } else if (ev.event === "disconnected") {
-              sessionRef.current = null;
-              setActiveHost(null);
-              setStatus("error");
-              setNotice(`disconnected: ${ev.reason}`);
-            } else if (ev.event === "host_key_changed") {
-              setChanged(ev);
-            } else if (ev.event === "host_key_revoked") {
-              setNotice(
-                `host key for ${ev.host}:${ev.port} is revoked (${ev.known_hosts_path}:${ev.known_hosts_line})`,
-              );
-            } else if (ev.event === "error") {
-              setStatus("error");
-              setNotice(ev.message);
+  /** Copy-on-select, and route multi-line pastes through a confirmation. */
+  const wireClipboard = useCallback((tabId: string, handle: pool.TerminalHandle) => {
+    const { term } = handle;
+
+    const selection = term.onSelectionChange(() => {
+      const text = term.getSelection();
+      if (text) void navigator.clipboard?.writeText(text).catch(() => {});
+    });
+    handle.disposers.push(() => selection.dispose());
+
+    // Returning false from the custom key handler means xterm does not process
+    // the event, so paste is intercepted before anything reaches the shell.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown") return true;
+      const accel = ev.metaKey || ev.ctrlKey;
+      if (!accel) return true;
+      const key = ev.key.toLowerCase();
+
+      if (key === "v" && (ev.metaKey || ev.shiftKey)) {
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            if (!text) return;
+            const { needsConfirmation, lineCount } = assessPaste(text);
+            if (needsConfirmation) {
+              setPastePending({ text, lineCount, tabId });
+            } else {
+              controller.write(tabId, text);
             }
-          },
-          (ev) =>
-            new Promise<boolean>((resolve) => {
-              decideRef.current = resolve;
-              setPrompt(ev);
-            }),
-        );
-        sessionRef.current = session;
-        setActiveHost(host);
-        setStatus("connected");
-        void refresh(query);
-      } catch (err) {
-        setStatus("error");
-        setNotice(`connect failed: ${String(err)}`);
+          })
+          .catch(() => {});
+        return false;
       }
+      // Copy is already handled by copy-on-select; let Cmd/Ctrl+Shift+C through
+      // to the browser so the native copy path still works.
+      return true;
+    });
+  }, []);
+
+  const openHost = useCallback(
+    async (hostId: number) => {
+      const host = hosts.find((h) => h.id === hostId);
+      if (!host) return;
+
+      // Font before terminal: xterm's WebGL renderer caches a glyph atlas from
+      // whatever font is loaded when the Terminal is constructed, and a
+      // fallback measured there stays wrong for the session's whole life.
+      await pool.waitForTerminalFont();
+
+      const tabId = openTab({ hostId, title: host.name });
+      const handle = pool.acquire(tabId);
+      handle.term.onData((data) => controller.write(tabId, data));
+      handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
+      wireClipboard(tabId, handle);
+
+      await controller.connect({
+        tabId,
+        hostId,
+        onHostKey: (ev) =>
+          new Promise<boolean>((resolve) => {
+            decideRef.current = resolve;
+            setPrompt(ev);
+          }),
+        onEvent: (ev) => {
+          if (ev.event === "host_key_changed") setChanged(ev);
+          if (ev.event === "host_key_revoked") {
+            setNotice(
+              `host key for ${ev.host}:${ev.port} is revoked (${ev.known_hosts_path}:${ev.known_hosts_line})`,
+            );
+          }
+        },
+      });
+      void refresh(query);
     },
-    [query, refresh, setStatus],
+    [hosts, openTab, query, refresh, wireClipboard],
   );
 
-  const disconnect = useCallback(async () => {
-    const s = sessionRef.current;
-    sessionRef.current = null;
-    setActiveHost(null);
-    if (s) await s.close().catch(() => {});
-    setStatus("idle");
-  }, [setStatus]);
+  const onCloseTab = useCallback(
+    (id: string) => {
+      void controller.destroy(id);
+      closeTab(id);
+    },
+    [closeTab],
+  );
 
   const answerPrompt = useCallback((accept: boolean) => {
     decideRef.current?.(accept);
@@ -152,8 +171,8 @@ export default function App() {
       const n = await removeKnownHost(changed.host, changed.port);
       setNotice(
         n > 0
-          ? `forgot ${n} key(s) for ${changed.host} — reconnect to verify the new one`
-          : `no stored key found for ${changed.host}`,
+          ? `Forgot ${n} key(s) for ${changed.host}. Reconnect to verify the new one.`
+          : `No stored key found for ${changed.host}.`,
       );
     } catch (err) {
       setNotice(`could not forget key: ${String(err)}`);
@@ -161,245 +180,139 @@ export default function App() {
     setChanged(null);
   }, [changed]);
 
-  const saveDraft = useCallback(async () => {
-    if (!draft) return;
-    try {
-      await createHost(
-        {
-          name: draft.name || draft.hostname,
-          hostname: draft.hostname,
-          port: Number(draft.port) || 22,
-          username: draft.username,
-          auth: draft.auth,
-          keyPath: draft.auth === "key_file" ? draft.keyPath || null : null,
-        },
-        draft.secret || undefined,
+  // Flow stats are read straight off the session object, never through the
+  // store — that object mutates on every frame and would re-render at 100 Hz.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const id = useSessions.getState().activeId;
+      const flow = id ? controller.flowOf(id) : null;
+      if (!flow) {
+        setFlowLine("");
+        return;
+      }
+      setFlowLine(
+        `${(flow.recvBytes / 1048576).toFixed(1)} MB · ${flow.pauseCount} pauses${
+          flow.paused ? " · paused (flow control)" : ""
+        }`,
       );
-      setDraft(null);
-      void refresh(query);
-    } catch (err) {
-      setNotice(`could not save host: ${String(err)}`);
-    }
-  }, [draft, query, refresh]);
-
-  const onTerminalReady = useCallback((ready: TerminalReady) => {
-    readyRef.current = ready;
-  }, []);
-  const onInput = useCallback((data: string) => {
-    void sessionRef.current?.writeText(data);
-  }, []);
-  const onResize = useCallback((cols: number, rows: number) => {
-    void sessionRef.current?.resize(cols, rows);
+    }, 500);
+    return () => clearInterval(timer);
   }, []);
 
-  const field = "rounded bg-neutral-800 px-2 py-1 text-xs outline-none";
-  const btn =
-    "rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600 disabled:opacity-40";
+  const activeTab = activeId ? byId[activeId] : null;
 
   return (
-    <div className="flex h-full bg-neutral-950 text-neutral-100">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-800">
-        <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
-          <span className="text-sm font-medium tracking-wide">Tern</span>
-          <button
-            type="button"
-            className={`${btn} ml-auto`}
-            onClick={() => setDraft({ ...EMPTY_DRAFT })}
-          >
-            + host
-          </button>
-        </div>
-        <input
-          className={`${field} m-2 rounded`}
-          placeholder="search hosts"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {hosts.length === 0 && (
-            <li className="px-1 py-3 text-xs text-neutral-500">
-              No hosts yet. Add one, or import your <code>~/.ssh/known_hosts</code> below.
-            </li>
-          )}
-          {hosts.map((h) => (
-            <li key={h.id}>
-              <div
-                className={`group flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-neutral-900 ${
-                  activeHost?.id === h.id ? "bg-neutral-900" : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  onDoubleClick={() => void connect(h)}
-                  onClick={() => void connect(h)}
-                  disabled={status === "connecting" || !!sessionRef.current}
+    <div className="h-full bg-[var(--lilt-canvas)] font-sans text-[var(--lilt-text)]">
+      <ResizablePanelGroup orientation="horizontal">
+        <ResizablePanel defaultSize={22} minSize={14} maxSize={40} collapsible>
+          <HostSidebar
+            hosts={hosts}
+            folders={folders}
+            query={query}
+            onQueryChange={setQuery}
+            onOpenHost={(id) => void openHost(id)}
+            header={
+              <div className="flex items-center gap-2 px-3 py-2.5">
+                <span className="font-display text-sm font-semibold">Tern</span>
+                <Button
+                  size="sm"
+                  variant="soft"
+                  className="ml-auto"
+                  onClick={() => setAdding(true)}
                 >
-                  <div className="truncate text-neutral-100">{h.name}</div>
-                  <div className="truncate text-[10px] text-neutral-500">
-                    {h.username ? `${h.username}@` : ""}
-                    {h.hostname}
-                    {h.port === 22 ? "" : `:${h.port}`} · {h.auth}
-                    {h.hasSecret ? " 🔑" : ""}
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  className="hidden text-neutral-500 hover:text-red-400 group-hover:block"
-                  title="Delete host"
-                  onClick={() => {
-                    void deleteHost(h.id).then(() => refresh(query));
-                  }}
+                  Add host
+                </Button>
+              </div>
+            }
+            footer={
+              <div className="border-t border-[var(--lilt-border)] p-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => setImporting(true)}
                 >
-                  ×
-                </button>
+                  Import ssh_config
+                </Button>
               </div>
-            </li>
-          ))}
-        </ul>
-        <button
-          type="button"
-          className={`${btn} mx-2`}
-          onClick={() => setImporting(true)}
-        >
-          import ~/.ssh/config
-        </button>
-        <button
-          type="button"
-          className={`${btn} m-2`}
-          onClick={() => {
-            void importKnownHosts()
-              .then((r) =>
-                setNotice(
-                  `imported ${r.imported} of ${r.total} known_hosts entries ` +
-                    `(${r.duplicates} already known, ${r.malformed} malformed)`,
-                ),
-              )
-              .catch((err) => setNotice(`import failed: ${String(err)}`));
-          }}
-        >
-          import ~/.ssh/known_hosts
-        </button>
-      </aside>
+            }
+          />
+        </ResizablePanel>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-3 text-sm">
-          <span className="text-xs text-neutral-400">
-            {activeHost ? activeHost.name : "no session"} · {status}
-          </span>
-          <button
-            type="button"
-            className={`${btn} ml-auto`}
-            disabled={status !== "connected"}
-            onClick={() => void disconnect()}
-          >
-            disconnect
-          </button>
-        </header>
-        <main className="min-h-0 flex-1">
-          <TerminalView onReady={onTerminalReady} onInput={onInput} onResize={onResize} />
-        </main>
-        {notice && (
-          <footer className="shrink-0 border-t border-neutral-800 px-3 py-1 font-mono text-[10px] text-neutral-400">
-            {notice}
-          </footer>
-        )}
-      </div>
+        <ResizableHandle />
 
-      {draft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-4 text-sm">
-            <h2 className="mb-3 text-base font-medium">New host</h2>
-            <div className="space-y-2">
-              <input
-                className={`${field} w-full`}
-                placeholder="name"
-                value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              />
-              <div className="flex gap-2">
-                <input
-                  className={`${field} min-w-0 flex-1`}
-                  placeholder="hostname"
-                  value={draft.hostname}
-                  onChange={(e) => setDraft({ ...draft, hostname: e.target.value })}
-                />
-                <input
-                  className={`${field} w-16`}
-                  placeholder="port"
-                  value={draft.port}
-                  onChange={(e) => setDraft({ ...draft, port: e.target.value })}
-                />
+        <ResizablePanel defaultSize={78}>
+          <div className="flex h-full min-w-0 flex-col bg-[var(--lilt-surface)]">
+            {order.length > 0 && (
+              <SessionTabs onClose={onCloseTab} onNew={() => setAdding(true)} />
+            )}
+
+            <main className="relative min-h-0 flex-1">
+              {order.length === 0 ? (
+                <div className="flex h-full items-center justify-center">
+                  <p className="text-sm text-[var(--lilt-text-subtle)]">
+                    Select a host to open a session.
+                  </p>
+                </div>
+              ) : (
+                <TerminalMount />
+              )}
+            </main>
+
+            <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-[var(--lilt-border)] px-3 text-[11px] text-[var(--lilt-text-subtle)]">
+              {activeTab && (
+                <span>
+                  {activeTab.title} · {activeTab.conn}
+                  {activeTab.detail ? ` — ${activeTab.detail}` : ""}
+                </span>
+              )}
+              <span className="ml-auto font-mono">{flowLine}</span>
+            </footer>
+            {notice && (
+              <div className="shrink-0 border-t border-[var(--lilt-border)] bg-[var(--lilt-surface-2)] px-3 py-1 font-mono text-[10px] text-[var(--lilt-text-muted)]">
+                {notice}
               </div>
-              <input
-                className={`${field} w-full`}
-                placeholder="username"
-                value={draft.username}
-                onChange={(e) => setDraft({ ...draft, username: e.target.value })}
-              />
-              <select
-                className={`${field} w-full`}
-                value={draft.auth}
-                onChange={(e) => setDraft({ ...draft, auth: e.target.value as AuthKind })}
-              >
-                <option value="agent">ssh-agent</option>
-                <option value="key_file">private key</option>
-                <option value="password">password</option>
-              </select>
-              {draft.auth === "key_file" && (
-                <input
-                  className={`${field} w-full`}
-                  placeholder="path to private key"
-                  value={draft.keyPath}
-                  onChange={(e) => setDraft({ ...draft, keyPath: e.target.value })}
-                />
-              )}
-              {draft.auth !== "agent" && (
-                <input
-                  className={`${field} w-full`}
-                  type="password"
-                  placeholder={draft.auth === "password" ? "password" : "key passphrase"}
-                  value={draft.secret}
-                  onChange={(e) => setDraft({ ...draft, secret: e.target.value })}
-                />
-              )}
-              <p className="text-[10px] text-neutral-500">
-                Secrets go to the OS keychain, never to the database.
-              </p>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" className={btn} onClick={() => setDraft(null)}>
-                cancel
-              </button>
-              <button
-                type="button"
-                className={btn}
-                disabled={!draft.hostname}
-                onClick={() => void saveDraft()}
-              >
-                save
-              </button>
-            </div>
+            )}
           </div>
-        </div>
-      )}
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
-      {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
+      {adding && (
+        <HostNewDialog
+          onClose={() => setAdding(false)}
+          onCreated={() => {
+            setAdding(false);
+            void refresh(query);
+          }}
+        />
+      )}
       {importing && (
         <SshConfigImportDialog
           onClose={() => setImporting(false)}
           onImported={(created: number, updated: number) => {
             setImporting(false);
-            setNotice(`imported ${created} new host(s), updated ${updated}`);
+            setNotice(`Imported ${created} new host(s), updated ${updated}.`);
             void refresh(query);
           }}
         />
       )}
+      {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
       {changed && (
         <ChangedKeyDialog
           detail={changed}
           onForget={() => void forgetChangedKey()}
           onDismiss={() => setChanged(null)}
+        />
+      )}
+      {pastePending && (
+        <PasteWarningDialog
+          text={pastePending.text}
+          lineCount={pastePending.lineCount}
+          onCancel={() => setPastePending(null)}
+          onConfirm={() => {
+            controller.write(pastePending.tabId, pastePending.text);
+            setPastePending(null);
+          }}
         />
       )}
     </div>
