@@ -4,43 +4,64 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 
+export interface TerminalReady {
+  term: Terminal;
+  fit: FitAddon;
+  /** "webgl" or "dom" — xterm 6 removed the canvas renderer. */
+  renderer: string;
+}
+
 /**
- * Mounts xterm with fit + WebGL (DOM renderer fallback — xterm 6 removed the
- * canvas renderer). The Phase 0 Spike 2 wires the Tauri Channel data path with
- * watermark flow control into `term` here.
+ * Mounts xterm with fit + WebGL (DOM renderer fallback). The parent wires the
+ * Tauri Channel data path in via `onReady`.
  */
-export function TerminalView() {
+export function TerminalView({
+  onReady,
+  onInput,
+  onResize,
+}: {
+  onReady: (ready: TerminalReady) => void;
+  onInput?: (data: string) => void;
+  onResize?: (cols: number, rows: number) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef(onInput);
+  const resizeRef = useRef(onResize);
+  const readyRef = useRef(onReady);
+  inputRef.current = onInput;
+  resizeRef.current = onResize;
+  readyRef.current = onReady;
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const term = new Terminal({ scrollback: 10_000 });
+    const term = new Terminal({ scrollback: 10_000, fontSize: 13 });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
 
+    let renderer = "dom";
     try {
       const webgl = new WebglAddon();
-      // On context loss, dispose the addon — xterm falls back to the DOM renderer.
       webgl.onContextLoss(() => webgl.dispose());
       term.loadAddon(webgl);
+      renderer = "webgl";
     } catch {
       // WebGL unavailable (some WebKitGTK setups) — DOM renderer fallback.
     }
 
     fit.fit();
-    term.writeln("Tern — terminal spike placeholder");
+    term.onData((data) => inputRef.current?.(data));
+    term.onResize(({ cols, rows }) => resizeRef.current?.(cols, rows));
 
-    const onResize = () => fit.fit();
-    window.addEventListener("resize", onResize);
+    const onWindowResize = () => fit.fit();
+    window.addEventListener("resize", onWindowResize);
 
-    // TODO(spike-2): attach the Tauri Channel -> term.write(bytes) path with
-    // pending-byte watermarks (pause/resume) here.
+    readyRef.current({ term, fit, renderer });
 
     return () => {
-      window.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", onWindowResize);
       term.dispose();
     };
   }, []);

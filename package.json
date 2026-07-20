@@ -8,6 +8,7 @@
     "build": "bun run tauri build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.0"
+    "@tauri-apps/cli": "^2.11.0",
+    "@xterm/headless": "^6.0.0"
   }
 }
