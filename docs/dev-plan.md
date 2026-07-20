@@ -23,9 +23,10 @@ These are the decisions that get expensive to change after month two.
 ```
 repo/
 ├─ crates/
-│  ├─ core-ssh/      # russh session mgmt, channels, forwards, agent
+│  ├─ core-ssh/      # russh session mgmt, channels, forwards, agent, known_hosts
+│  ├─ core-store/    # SQLite: hosts, folders, tags, settings (ADR-0012)
 │  ├─ core-sftp/     # russh-sftp wrapper, transfer queue engine
-│  ├─ core-vault/    # storage + crypto (SQLite, argon2id, XChaCha20)
+│  ├─ core-vault/    # secrets: OS keyring, then argon2id/XChaCha20 vault
 │  ├─ core-serial/   # serialport-rs + minimal telnet
 │  └─ proto/         # serde types shared across the IPC boundary
 ├─ apps/desktop/     # Tauri 2 shell (thin: wiring + capabilities)
@@ -90,11 +91,19 @@ Kill the unknowns while the codebase is still 500 lines.
 
 ### Phase 1 — Terminal core (4–6 weeks)
 
-- Host manager: CRUD, folders/tags, search, quick-connect (SQLite).
-- Auth: password, publickey (ed25519/ECDSA/RSA), agent, keyboard-interactive; per-host overrides.
+- Host manager: CRUD, folders/tags, search, quick-connect (SQLite, ADR-0012).
+- Auth: password, publickey (ed25519/ECDSA/RSA), agent; per-host overrides.
+- Host-key trust: own known_hosts, TOFU, changed-key refusal (ADR-0013).
 - **`~/.ssh/config` import** — disproportionate adoption lever, do it early. OpenSSH and PuTTY key import.
 - Terminal UX: tabs, themes, font config, scrollback + search, copy-on-select, paste protection.
 - Reconnect logic, keepalive, clear connection-state UI.
+
+**Deferred out of Phase 1:** keyboard-interactive auth (the cost is the async
+prompt round-trip across the IPC boundary, not the protocol) and i18n (a
+per-string tax on every component written this phase). PuTTY `.ppk` import and
+the Windows agent stay in — `ssh-key`'s `ppk` feature and russh's
+`connect_named_pipe`/`connect_pageant` are already compiled into the tree, so
+both are adapter work rather than protocol work.
 
 **Exit criteria:** you dogfood it daily against your own fleet and stop reaching for the old client. Nothing validates a terminal like living in it.
 
