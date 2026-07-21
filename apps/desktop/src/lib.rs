@@ -3,6 +3,7 @@
 
 mod auth;
 mod commands;
+mod reconnect;
 mod session_cfg;
 mod store_commands;
 
