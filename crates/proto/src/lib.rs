@@ -106,6 +106,15 @@ pub enum SessionEvent {
     /// First contact with an unknown host key. The UI prompts; the connect
     /// blocks until `approve_host_key` answers.
     HostKeyPrompt {
+        /// The session this prompt belongs to, and the id to answer it with.
+        ///
+        /// Carried in the event because it is the only way the UI can learn the
+        /// id in time: `open_session` mints the id but does not return it until
+        /// the connect finishes, and the connect cannot finish until this very
+        /// prompt is answered. Without it the UI would answer with an empty id
+        /// and the connect would hang forever awaiting a decision that can never
+        /// be routed back.
+        session_id: String,
         host: String,
         port: u16,
         algorithm: String,

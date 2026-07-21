@@ -192,6 +192,7 @@ describe("host key decisions", () => {
     await TermSession.open(term as unknown as import("@xterm/xterm").Terminal, req);
     channels[0].emit({
       event: "host_key_prompt",
+      session_id: "s-1",
       host: "example.com",
       port: 22,
       algorithm: "ssh-ed25519",
@@ -222,6 +223,7 @@ describe("host key decisions", () => {
     );
     channels[0].emit({
       event: "host_key_prompt",
+      session_id: "s-1",
       host: "example.com",
       port: 22,
       algorithm: "ssh-ed25519",
@@ -231,5 +233,43 @@ describe("host key decisions", () => {
     await new Promise((r) => setTimeout(r, 0));
     const approve = invokeCalls.find((c) => c.cmd === "approve_host_key");
     expect(approve?.args).toEqual({ id: "s-1", accept: false });
+  });
+
+  it("answers with the id from the event, not the not-yet-returned session id", async () => {
+    // The real ordering, and the regression this guards: open_session does not
+    // resolve until the prompt is answered, so `session.id` is still "" when the
+    // event arrives. Answering from `session.id` sends an empty id the backend
+    // routes to nothing, and the connect hangs forever. The id must come from
+    // the event. (This test would fail against the old `session.id` code.)
+    const term = new FakeTerminal();
+    const channels: Array<Channel<unknown>> = [];
+    // Never resolves — exactly what open_session does while its own connect is
+    // blocked awaiting this host-key decision.
+    invokeHandlers.set("open_session", (args) => {
+      const { events } = args as { events: Channel<unknown> };
+      channels.push(events);
+      return new Promise<string>(() => {});
+    });
+
+    void TermSession.open(
+      term as unknown as import("@xterm/xterm").Terminal,
+      req,
+      undefined,
+      () => Promise.resolve(true),
+    );
+    // open() wires the events channel synchronously before it awaits
+    // open_session, so the channel is already captured here.
+    channels[0].emit({
+      event: "host_key_prompt",
+      session_id: "s-7",
+      host: "example.com",
+      port: 22,
+      algorithm: "ssh-ed25519",
+      fingerprint_sha256: "SHA256:abc",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    const approve = invokeCalls.find((c) => c.cmd === "approve_host_key");
+    expect(approve?.args).toEqual({ id: "s-7", accept: true });
   });
 });

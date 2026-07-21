@@ -276,8 +276,9 @@ fn host_key_prompt(
                         "host key: first contact — prompting user",
                     );
                     let (tx, rx) = oneshot::channel();
-                    pending.lock().await.insert(sid, tx);
+                    pending.lock().await.insert(sid.clone(), tx);
                     let _ = ev.send(SessionEvent::HostKeyPrompt {
+                        session_id: sid,
                         host: info.host.clone(),
                         port: info.port,
                         algorithm: info.algorithm.clone(),
@@ -867,12 +868,16 @@ pub async fn approve_host_key(
     accept: bool,
 ) -> Result<(), String> {
     let sender = state.pending_host_keys.lock().await.remove(&id);
-    match sender {
-        Some(tx) => {
-            let _ = tx.send(accept);
-            Ok(())
-        }
-        None => Err(format!("no pending host-key prompt for {id}")),
+    if let Some(tx) = sender {
+        info!(session = %id, accept, "approve_host_key: delivering decision");
+        let _ = tx.send(accept);
+        Ok(())
+    } else {
+        // The id did not match a waiting prompt. Almost always a UI bug —
+        // answering with an id it did not get from the `HostKeyPrompt` event —
+        // and one that strands the connect, so it is a warning.
+        warn!(session = %id, "approve_host_key: no pending prompt for this id");
+        Err(format!("no pending host-key prompt for {id}"))
     }
 }
 

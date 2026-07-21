@@ -38,6 +38,10 @@ export interface OpenSessionReq {
 export type SessionEvent =
   | {
       event: "host_key_prompt";
+      // The id to answer this prompt with. It arrives on the event because
+      // `open_session` has not returned the id yet — it is blocked on this very
+      // prompt — so `session.id` is still empty here.
+      session_id: string;
       host: string;
       port: number;
       algorithm: string;
@@ -189,12 +193,18 @@ export class TermSession {
     const events = new Channel<SessionEvent>();
     events.onmessage = (ev) => {
       if (ev.event === "host_key_prompt") {
+        // Answer with the id from the event, never `session.id`: `open_session`
+        // has not returned yet (it is blocked on this prompt), so `session.id`
+        // is still "". Using it would answer with an empty id the backend can
+        // route to nothing, and the connect would hang awaiting a decision that
+        // never arrives.
+        const promptId = ev.session_id;
         const decide = onHostKey ?? (async () => false);
         void decide(ev)
-          .then((accept) => invoke("approve_host_key", { id: session.id, accept }))
+          .then((accept) => invoke("approve_host_key", { id: promptId, accept }))
           // The Rust side is blocked on this answer; a thrown decision must
           // still resolve to a refusal rather than hanging the connect.
-          .catch(() => invoke("approve_host_key", { id: session.id, accept: false }))
+          .catch(() => invoke("approve_host_key", { id: promptId, accept: false }))
           .catch(() => {});
       }
       session.onEvent?.(ev);
