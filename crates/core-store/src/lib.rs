@@ -34,7 +34,7 @@ pub use model::{
     TagId, decode_auth_fallbacks, encode_auth_fallbacks,
 };
 pub use settings::{
-    KEY_HASH_KNOWN_HOSTS, KEY_KNOWN_HOSTS_IMPORT_OFFERED, KEY_RECONNECT_ENABLED,
+    KEY_APPEARANCE, KEY_HASH_KNOWN_HOSTS, KEY_KNOWN_HOSTS_IMPORT_OFFERED, KEY_RECONNECT_ENABLED,
     KEY_RECONNECT_MAX_ATTEMPTS, SettingsRepo,
 };
 pub use ssh_config::{

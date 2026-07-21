@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 mod store;
 
 pub use store::{
-    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto, KeyringStatusDto,
-    KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
+    AppearanceDto, AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto,
+    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
     SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 

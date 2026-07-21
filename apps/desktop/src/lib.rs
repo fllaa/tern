@@ -70,6 +70,9 @@ pub fn run() {
             store_commands::keyring_status,
             store_commands::inspect_key,
             store_commands::verify_key_passphrase,
+            // appearance
+            store_commands::get_appearance,
+            store_commands::set_appearance,
             // benchmark harness (Phase 0; kept runnable so regressions show)
             commands::bench_reset,
             commands::bench_stats,

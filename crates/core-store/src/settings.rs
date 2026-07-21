@@ -25,6 +25,12 @@ pub const KEY_HASH_KNOWN_HOSTS: &str = "known_hosts.hash";
 pub const KEY_RECONNECT_ENABLED: &str = "reconnect.enabled";
 pub const KEY_RECONNECT_MAX_ATTEMPTS: &str = "reconnect.max_attempts";
 
+/// Appearance, stored as one JSON blob under a single key. A blob rather than a
+/// key each because it is always read and written whole (the settings dialog
+/// holds the entire record), and one row is easier to reason about than four
+/// that could drift out of step.
+pub const KEY_APPEARANCE: &str = "appearance";
+
 pub struct SettingsRepo<'a> {
     store: &'a Store,
 }

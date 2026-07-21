@@ -284,3 +284,29 @@ pub struct KeyInfoDto {
     pub fingerprint: Option<String>,
     pub comment: Option<String>,
 }
+
+/// Appearance settings, stored and edited as one record.
+///
+/// `theme` is the app light/dark choice ("system" | "light" | "dark");
+/// `terminal_theme` names a colour scheme for the terminal itself. Fonts apply
+/// to the terminal only — the app chrome uses its own type scale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceDto {
+    pub theme: String,
+    pub terminal_theme: String,
+    pub font_family: String,
+    pub font_size: u32,
+}
+
+impl Default for AppearanceDto {
+    fn default() -> Self {
+        Self {
+            theme: "system".into(),
+            terminal_theme: "auto".into(),
+            // Empty means "the app's --font-mono token"; the webview resolves it.
+            font_family: String::new(),
+            font_size: 13,
+        }
+    }
+}

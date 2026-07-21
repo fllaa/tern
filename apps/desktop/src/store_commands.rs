@@ -14,8 +14,8 @@ use tern_core_ssh::KnownHostsFile;
 use tern_core_store::{AuthKind, HostFilter, HostOverrides, NewHost, Store};
 use tern_core_vault::KeyringAvailability;
 use tern_proto::{
-    AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto, KeyringStatusDto,
-    KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
+    AppearanceDto, AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto,
+    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
     SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
 };
 
@@ -685,4 +685,32 @@ pub async fn verify_key_passphrase(
     })
     .await
     .map_err(|e| format!("key unlock failed: {e}"))?
+}
+
+/// Read appearance settings, falling back to defaults on first run.
+#[tauri::command]
+pub async fn get_appearance(state: State<'_, AppState>) -> Result<AppearanceDto, String> {
+    blocking(&state, |store| {
+        Ok(store
+            .settings()
+            .get::<AppearanceDto>(tern_core_store::KEY_APPEARANCE)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default())
+    })
+    .await
+}
+
+/// Persist appearance settings. The webview applies them live; this only stores.
+#[tauri::command]
+pub async fn set_appearance(
+    state: State<'_, AppState>,
+    appearance: AppearanceDto,
+) -> Result<(), String> {
+    blocking(&state, move |store| {
+        store
+            .settings()
+            .set(tern_core_store::KEY_APPEARANCE, &appearance)
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
