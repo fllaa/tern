@@ -9,7 +9,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-
+import { AppearanceDialog } from "./components/AppearanceDialog";
 import {
   type ChangedKey,
   ChangedKeyDialog,
@@ -24,6 +24,14 @@ import { SessionTabs } from "./components/SessionTabs";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { TerminalMount } from "./components/TerminalMount";
 import { TerminalSearch } from "./components/TerminalSearch";
+import {
+  type Appearance,
+  applyAppearance,
+  DEFAULT_APPEARANCE,
+  getAppearance,
+  setAppearance as persistAppearance,
+  watchSystemTheme,
+} from "./lib/appearance";
 import {
   type Folder,
   type Host,
@@ -50,6 +58,8 @@ export default function App() {
   const [importing, setImporting] = useState(false);
   const [palette, setPalette] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
+  const [showAppearance, setShowAppearance] = useState(false);
   // Non-null when this machine has no working credential store. A persistent
   // banner rather than a transient notice: it changes what "remember my
   // password" can mean, and stays true for the whole session.
@@ -104,6 +114,31 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Load and apply saved appearance once at startup. Applied before the state
+  // is set so the terminal never flashes the default before the saved theme.
+  useEffect(() => {
+    getAppearance()
+      .then((a) => {
+        applyAppearance(a);
+        setAppearance(a);
+      })
+      .catch(() => applyAppearance(DEFAULT_APPEARANCE));
+  }, []);
+
+  // A "system" theme has to keep following the OS while the app is open.
+  useEffect(
+    () => watchSystemTheme(appearance.theme, () => applyAppearance(appearance)),
+    [appearance],
+  );
+
+  // Apply live and persist. Live first so the change is visible immediately;
+  // the write is fire-and-forget because a failed persist must not block the UI.
+  const changeAppearance = useCallback((next: Appearance) => {
+    applyAppearance(next);
+    setAppearance(next);
+    void persistAppearance(next).catch(() => {});
   }, []);
 
   // Probe the credential store once at startup. A failure to even ask is
@@ -327,14 +362,21 @@ export default function App() {
               </div>
             }
             footer={
-              <div className="border-t border-[var(--lilt-border)] p-2">
+              <div className="flex gap-2 border-t border-[var(--lilt-border)] p-2">
                 <Button
                   size="sm"
                   variant="secondary"
-                  className="w-full"
+                  className="flex-1"
                   onClick={() => setImporting(true)}
                 >
                   Import ssh_config
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setShowAppearance(true)}
+                >
+                  Appearance
                 </Button>
               </div>
             }
@@ -425,6 +467,13 @@ export default function App() {
         onOpenChange={setPalette}
         onPick={(id) => void openHost(id)}
       />
+      {showAppearance && (
+        <AppearanceDialog
+          value={appearance}
+          onChange={changeAppearance}
+          onClose={() => setShowAppearance(false)}
+        />
+      )}
       {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
       {changed && (
         <ChangedKeyDialog

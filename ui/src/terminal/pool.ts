@@ -70,6 +70,16 @@ export const DEFAULT_TERMINAL_OPTIONS: TerminalOptions = {
   scrollback: 10_000,
 };
 
+// The options new terminals are created with. Mutable so an appearance change
+// reaches tabs opened *after* it, not just the ones already on screen (those
+// are handled by `restyleAll`).
+let currentOptions: TerminalOptions = { ...DEFAULT_TERMINAL_OPTIONS };
+
+/** Update the defaults future terminals are created with. */
+export function setDefaults(opts: Partial<TerminalOptions>): void {
+  currentOptions = { ...currentOptions, ...opts };
+}
+
 /**
  * The webfont must be loaded *before* the first Terminal is constructed.
  *
@@ -78,9 +88,7 @@ export const DEFAULT_TERMINAL_OPTIONS: TerminalOptions = {
  * cell is mis-sized for the life of the session and no amount of later
  * refreshing fixes it.
  */
-export async function waitForTerminalFont(
-  opts = DEFAULT_TERMINAL_OPTIONS,
-): Promise<void> {
+export async function waitForTerminalFont(opts = currentOptions): Promise<void> {
   if (!document.fonts) return;
   try {
     await document.fonts.load(`${opts.fontSize}px ${opts.fontFamily}`);
@@ -92,7 +100,7 @@ export async function waitForTerminalFont(
 }
 
 /** Create (or return) the terminal for a tab. */
-export function acquire(id: TabId, opts = DEFAULT_TERMINAL_OPTIONS): TerminalHandle {
+export function acquire(id: TabId, opts = currentOptions): TerminalHandle {
   const existing = pool.get(id);
   if (existing) return existing;
 
