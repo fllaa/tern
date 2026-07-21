@@ -31,6 +31,8 @@ bytes.workspace = true
 tern-core-ssh.workspace = true
 tern-core-store.workspace = true
 tern-core-vault.workspace = true
+# Jitter for the reconnect backoff. Already vetted via core-ssh; same version.
+getrandom = "0.4"
 
 [lints]
 workspace = true

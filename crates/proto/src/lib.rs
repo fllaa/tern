@@ -136,6 +136,18 @@ pub enum SessionEvent {
         known_hosts_line: usize,
     },
     Connected,
+    /// A reconnect attempt is scheduled after a transport drop. Purely
+    /// informational — the session id is unchanged and the terminal keeps its
+    /// scrollback; this drives the "reconnecting…" indicator and the countdown.
+    /// `Connected` follows on success, `Disconnected` when the supervisor gives
+    /// up.
+    Reconnecting {
+        attempt: u32,
+        /// The configured ceiling, or `0` for unlimited — shown as "n/max".
+        max_attempts: u32,
+        /// How long until this attempt fires, so the UI can count down.
+        delay_ms: u64,
+    },
     /// The transport died. Distinct from `Exited`, which means the remote
     /// shell ended on its own — only this one should trigger a reconnect.
     Disconnected {
