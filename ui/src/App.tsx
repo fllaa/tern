@@ -298,10 +298,14 @@ export default function App() {
         setFlowLine("");
         return;
       }
+      // The renderer is worth surfacing: on Linux a WebKitGTK build without a
+      // usable GL context silently falls back to the DOM renderer, and "which
+      // renderer am I on?" is otherwise a devtools question.
+      const renderer = id ? (pool.get(id)?.renderer ?? "") : "";
       setFlowLine(
-        `${(flow.recvBytes / 1048576).toFixed(1)} MB · ${flow.pauseCount} pauses${
-          flow.paused ? " · paused (flow control)" : ""
-        }`,
+        `${renderer ? `${renderer} · ` : ""}${(flow.recvBytes / 1048576).toFixed(1)} MB · ${
+          flow.pauseCount
+        } pauses${flow.paused ? " · paused (flow control)" : ""}`,
       );
     }, 500);
     return () => clearInterval(timer);
