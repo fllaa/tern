@@ -16,6 +16,7 @@ import {
   FirstContactDialog,
 } from "./components/HostKeyDialog";
 import { HostNewDialog } from "./components/HostNewDialog";
+import { HostPalette } from "./components/HostPalette";
 import { HostSidebar } from "./components/HostSidebar";
 import { PasteWarningDialog } from "./components/PasteWarningDialog";
 import { SessionOverlay, StatusPill } from "./components/SessionStatus";
@@ -31,6 +32,7 @@ import {
   removeKnownHost,
 } from "./lib/hosts-ipc";
 import type { HostKeyPrompt } from "./lib/ipc";
+import { matchShortcut } from "./lib/shortcuts";
 import * as controller from "./session/controller";
 import { useSessions } from "./store/sessions";
 import { assessPaste } from "./terminal/clipboard";
@@ -45,6 +47,7 @@ export default function App() {
 
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [palette, setPalette] = useState(false);
   // Non-null when this machine has no working credential store. A persistent
   // banner rather than a transient notice: it changes what "remember my
   // password" can mean, and stays true for the whole session.
@@ -81,6 +84,21 @@ export default function App() {
     void refresh(query);
   }, [query, refresh]);
 
+  // App-level shortcuts. Bound on window (capture phase) so they fire even
+  // while a terminal holds focus — xterm lets these chords bubble because the
+  // terminal's own key handler returns false for them (see wireClipboard).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const shortcut = matchShortcut(e);
+      if (shortcut === "palette") {
+        e.preventDefault();
+        setPalette((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Probe the credential store once at startup. A failure to even ask is
   // treated as "no store" — the honest default is to warn rather than to
   // assume it works and silently drop saved secrets.
@@ -108,6 +126,11 @@ export default function App() {
     // the event, so paste is intercepted before anything reaches the shell.
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
+
+      // App chords (palette, search) must reach the window listener, not the
+      // shell. Returning false stops xterm from consuming them so they bubble.
+      if (matchShortcut(ev)) return false;
+
       const accel = ev.metaKey || ev.ctrlKey;
       if (!accel) return true;
       const key = ev.key.toLowerCase();
@@ -382,6 +405,12 @@ export default function App() {
           }}
         />
       )}
+      <HostPalette
+        hosts={hosts}
+        open={palette}
+        onOpenChange={setPalette}
+        onPick={(id) => void openHost(id)}
+      />
       {prompt && <FirstContactDialog prompt={prompt} onDecide={answerPrompt} />}
       {changed && (
         <ChangedKeyDialog
