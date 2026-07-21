@@ -7,9 +7,12 @@
 
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-use tern_core_ssh::{AuthMethod, SessionConfig, ShellChannel, SshSession, accept_any_host_key};
+use tern_core_ssh::{
+    AuthMethod, HostKeyCallback, SessionConfig, ShellChannel, SshSession, accept_any_host_key,
+};
 
 const OPENSSH_PORT: u16 = 2222;
 const DROPBEAR_PORT: u16 = 2223;
@@ -252,6 +255,33 @@ async fn an_offered_method_is_still_attempted_after_an_earlier_failure() {
     let session = SshSession::connect(cfg, accept_any_host_key())
         .await
         .expect("the real key is publickey, which this server does offer");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// A slow host-key decision must not surface as a connect timeout. The connect
+/// timeout bounds the network handshake; the human at the TOFU dialog is not
+/// the network, and their thinking time cannot count against it.
+///
+/// The callback here deliberately blocks three times the connect timeout before
+/// accepting. Without the re-arm, that delay would trip `ConnectTimeout`; with
+/// it, the connect waits for the decision and then succeeds.
+#[tokio::test]
+async fn a_slow_host_key_decision_does_not_trip_the_connect_timeout() {
+    require_rig!(OPENSSH_PORT);
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        connect_timeout: Duration::from_millis(400),
+        ..SessionConfig::new(rig_host(), "tern", key_auth())
+    };
+    let slow_accept: HostKeyCallback = Arc::new(|_| {
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            true
+        })
+    });
+    let session = SshSession::connect(cfg, slow_accept)
+        .await
+        .expect("a slow but eventual host-key accept must connect, not time out");
     session.disconnect().await.expect("disconnect");
 }
 

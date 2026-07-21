@@ -4,6 +4,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -23,6 +24,11 @@ use crate::error::SshError;
 /// Depth of the outbound `Bytes` queue between the pump and the consumer.
 /// Bounded on purpose: it is one link in the end-to-end backpressure chain.
 const OUTPUT_QUEUE_DEPTH: usize = 32;
+
+/// How long a host-key prompt may hold a connect open before it is abandoned.
+/// Generous by design — it is a human verifying a fingerprint, possibly out of
+/// band — but bounded so a superseded prompt cannot leak the connect forever.
+const MAX_HOST_KEY_WAIT: Duration = Duration::from_secs(180);
 
 /// What a user must see before trusting a host key (TOFU).
 #[derive(Debug, Clone)]
@@ -54,6 +60,10 @@ struct ClientHandler {
     host: String,
     port: u16,
     on_host_key: HostKeyCallback,
+    /// Set true while the host-key callback is blocked on a human decision, so
+    /// the connect timeout can tell "the network is hung" from "the user is
+    /// still reading the fingerprint" and not fire on the latter.
+    awaiting_user: Arc<AtomicBool>,
 }
 
 impl client::Handler for ClientHandler {
@@ -70,7 +80,12 @@ impl client::Handler for ClientHandler {
             fingerprint_sha256: key.fingerprint(HashAlg::Sha256).to_string(),
             public_key: key.clone(),
         };
-        Ok((self.on_host_key)(info).await)
+        // The callback may block on a TOFU dialog; mark that window so the
+        // connect timeout does not count the user's thinking time against it.
+        self.awaiting_user.store(true, Ordering::Relaxed);
+        let accepted = (self.on_host_key)(info).await;
+        self.awaiting_user.store(false, Ordering::Relaxed);
+        Ok(accepted)
     }
 }
 
@@ -96,22 +111,50 @@ impl SshSession {
             nodelay: true,
             ..client::Config::default()
         });
+        let awaiting_user = Arc::new(AtomicBool::new(false));
         let handler = ClientHandler {
             host: cfg.host.clone(),
             port: cfg.port,
             on_host_key,
+            awaiting_user: Arc::clone(&awaiting_user),
         };
 
-        let mut handle = tokio::time::timeout(
-            cfg.connect_timeout,
-            client::connect(config, (cfg.host.as_str(), cfg.port), handler),
-        )
-        .await
-        .map_err(|_| SshError::ConnectTimeout(cfg.connect_timeout))?
-        .map_err(|e| match e {
-            SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
-            other => other,
-        })?;
+        // The connect timeout bounds the *network* handshake, not the human at
+        // the TOFU dialog. When it elapses while the host-key callback is
+        // blocked on the user, re-arm rather than fail — the user answering is
+        // what completes the connect, and it does so within a re-armed window.
+        // A genuinely hung handshake never sets `awaiting_user`, so it still
+        // fails at the first expiry.
+        //
+        // The re-arming is capped so an *abandoned* prompt — one superseded by a
+        // later connect that reused the shared UI resolver, say — eventually
+        // fails instead of leaking a task forever. The cap is generous: it is
+        // decision time for a human verifying a fingerprint out of band, not a
+        // network bound.
+        let mut connect = std::pin::pin!(client::connect(
+            config,
+            (cfg.host.as_str(), cfg.port),
+            handler,
+        ));
+        let mut user_waited = Duration::ZERO;
+        let mut handle = loop {
+            match tokio::time::timeout(cfg.connect_timeout, &mut connect).await {
+                Ok(result) => {
+                    break result.map_err(|e| match e {
+                        SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
+                        other => other,
+                    })?;
+                }
+                Err(_elapsed)
+                    if awaiting_user.load(Ordering::Relaxed) && user_waited < MAX_HOST_KEY_WAIT =>
+                {
+                    // Re-arm: fall through to the next loop iteration, which
+                    // polls the same pinned connect future again.
+                    user_waited = user_waited.saturating_add(cfg.connect_timeout);
+                }
+                Err(_elapsed) => return Err(SshError::ConnectTimeout(cfg.connect_timeout)),
+            }
+        };
 
         authenticate(&mut handle, &cfg).await?;
 
