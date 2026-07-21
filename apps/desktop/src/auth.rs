@@ -14,6 +14,7 @@
 use tern_core_ssh::AuthMethod;
 use tern_core_store::{AuthKind, Host, HostId};
 use tern_core_vault::{KeyringAvailability, OsKeyring, VaultError};
+use tracing::debug;
 
 /// Keyring service name. The bundle identifier, so entries are attributable in
 /// Keychain Access / Credential Manager / seahorse.
@@ -145,6 +146,15 @@ pub fn auth_for_host(host: &Host) -> ResolvedAuth {
             .map(|k| build(*k)),
     );
 
+    // `?methods` is safe: `AuthMethod`'s `Debug` redacts every secret and prints
+    // only the key path — which is exactly what makes "is it trying the right
+    // key?" answerable from the log.
+    debug!(
+        host_id = %host.id,
+        methods = ?methods,
+        degraded = degraded.is_some(),
+        "auth: resolved chain for saved host",
+    );
     ResolvedAuth { methods, degraded }
 }
 

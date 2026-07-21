@@ -29,6 +29,7 @@ use tern_proto::{
 };
 use tern_term_stream::{CoalescerConfig, StreamStats, coalesce};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tracing::{debug, info, warn};
 
 use crate::reconnect::{Backoff, Decision, PumpEnd, ReconnectPolicy};
 
@@ -236,8 +237,12 @@ fn host_key_prompt(
             };
 
             match verdict {
-                HostKeyVerdict::Trusted => true,
+                HostKeyVerdict::Trusted => {
+                    debug!(host = %info.host, port = info.port, "host key: known and trusted");
+                    true
+                }
                 HostKeyVerdict::Revoked { line } => {
+                    warn!(host = %info.host, port = info.port, "host key: revoked — refusing");
                     let _ = ev.send(SessionEvent::HostKeyRevoked {
                         host: info.host.clone(),
                         port: info.port,
@@ -251,6 +256,7 @@ fn host_key_prompt(
                     recorded_algorithm,
                     recorded_fingerprint,
                 } => {
+                    warn!(host = %info.host, port = info.port, "host key: changed — refusing");
                     let _ = ev.send(SessionEvent::HostKeyChanged {
                         host: info.host.clone(),
                         port: info.port,
@@ -263,6 +269,12 @@ fn host_key_prompt(
                     false
                 }
                 HostKeyVerdict::Unknown => {
+                    info!(
+                        host = %info.host,
+                        port = info.port,
+                        fingerprint = %info.fingerprint_sha256,
+                        "host key: first contact — prompting user",
+                    );
                     let (tx, rx) = oneshot::channel();
                     pending.lock().await.insert(sid, tx);
                     let _ = ev.send(SessionEvent::HostKeyPrompt {
@@ -425,6 +437,7 @@ async fn supervise(
             let (attempt, delay) = match decision {
                 Decision::Reconnect { attempt, delay } => (attempt, delay),
                 Decision::GiveUp => {
+                    warn!(reason = %reason, "supervise: giving up — reconnect exhausted");
                     let _ = events.send(SessionEvent::Disconnected { reason });
                     return;
                 }
@@ -435,6 +448,7 @@ async fn supervise(
                 }
             };
 
+            debug!(attempt, delay = ?delay, "supervise: reconnecting after transport drop");
             let _ = events.send(SessionEvent::Reconnecting {
                 attempt,
                 max_attempts: policy.max_attempts,
@@ -469,6 +483,7 @@ async fn supervise(
         // A fresh generation has no backlog; clear any pause left from the old
         // one so the new producer is not throttled against a stale watermark.
         let _ = desktop_pause.send(false);
+        info!("supervise: reconnected — transport swapped, scrollback preserved");
         let _ = events.send(SessionEvent::Connected);
         out = established.out;
         ssh = established.ssh;
@@ -612,11 +627,14 @@ async fn connect_ssh(
 
     let session = SshSession::connect(ssh_cfg, on_host_key)
         .await
-        .map_err(|e| e.to_string())?;
-    let shell = session
-        .open_shell(req.cols, req.rows)
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            warn!(session = %id, error = %e, "connect_ssh: connect failed");
+            e.to_string()
+        })?;
+    let shell = session.open_shell(req.cols, req.rows).await.map_err(|e| {
+        warn!(session = %id, error = %e, "connect_ssh: open shell failed");
+        e.to_string()
+    })?;
     let (out, control) = shell.split();
 
     // Only a successful connect counts — a failed attempt should not reorder
@@ -681,6 +699,15 @@ pub async fn open_session(
     events: Channel<SessionEvent>,
 ) -> Result<SessionId, String> {
     let id = format!("s-{}", state.next_id.fetch_add(1, Ordering::Relaxed));
+    // A label that never touches the auth field: `Target`'s derived `Debug`
+    // would print an ad-hoc password in the clear, so build the string by hand
+    // from the non-secret fields only.
+    let target = match &req.target {
+        Target::Ssh(t) => format!("ssh {}@{}:{}", t.username, t.host, t.port),
+        Target::SavedHost { host_id } => format!("saved-host {host_id}"),
+        Target::LocalPty(t) => format!("pty {}", t.program.as_deref().unwrap_or("<shell>")),
+    };
+    info!(session = %id, %target, "open_session");
     let stream_stats = StreamStats::new();
     let frame_cfg = coalescer_cfg(&req);
     let (in_tx, desktop_pause) = spawn_data_path(frame_cfg, Arc::clone(&stream_stats), data);

@@ -17,6 +17,7 @@ use russh::keys::ssh_key::HashAlg;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::{debug, info, warn};
 
 use crate::config::{AuthMethod, SessionConfig};
 use crate::error::SshError;
@@ -80,11 +81,19 @@ impl client::Handler for ClientHandler {
             fingerprint_sha256: key.fingerprint(HashAlg::Sha256).to_string(),
             public_key: key.clone(),
         };
+        info!(
+            host = %self.host,
+            port = self.port,
+            algorithm = %info.algorithm,
+            fingerprint = %info.fingerprint_sha256,
+            "host key presented; awaiting trust decision",
+        );
         // The callback may block on a TOFU dialog; mark that window so the
         // connect timeout does not count the user's thinking time against it.
         self.awaiting_user.store(true, Ordering::Relaxed);
         let accepted = (self.on_host_key)(info).await;
         self.awaiting_user.store(false, Ordering::Relaxed);
+        info!(host = %self.host, accepted, "host key decision received");
         Ok(accepted)
     }
 }
@@ -119,6 +128,24 @@ impl SshSession {
             awaiting_user: Arc::clone(&awaiting_user),
         };
 
+        // The chain, redacted to labels, is the single most useful line when a
+        // connect misbehaves: it says which methods will be tried and in what
+        // order. `method_label` never emits secret material.
+        let chain = cfg
+            .auth
+            .iter()
+            .map(method_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            host = %cfg.host,
+            port = cfg.port,
+            user = %cfg.username,
+            connect_timeout = ?cfg.connect_timeout,
+            auth_chain = %chain,
+            "ssh connect: opening transport",
+        );
+
         // The connect timeout bounds the *network* handshake, not the human at
         // the TOFU dialog. When it elapses while the host-key callback is
         // blocked on the user, re-arm rather than fail — the user answering is
@@ -151,12 +178,25 @@ impl SshSession {
                     // Re-arm: fall through to the next loop iteration, which
                     // polls the same pinned connect future again.
                     user_waited = user_waited.saturating_add(cfg.connect_timeout);
+                    debug!(
+                        waited = ?user_waited,
+                        "ssh connect: timeout elapsed while awaiting host-key decision; re-arming",
+                    );
                 }
-                Err(_elapsed) => return Err(SshError::ConnectTimeout(cfg.connect_timeout)),
+                Err(_elapsed) => {
+                    warn!(
+                        host = %cfg.host,
+                        connect_timeout = ?cfg.connect_timeout,
+                        "ssh connect: transport handshake timed out",
+                    );
+                    return Err(SshError::ConnectTimeout(cfg.connect_timeout));
+                }
             }
         };
 
+        debug!(host = %cfg.host, "ssh connect: transport up; authenticating");
         authenticate(&mut handle, &cfg).await?;
+        info!(host = %cfg.host, user = %cfg.username, "ssh connect: session ready");
 
         Ok(Self {
             handle,
@@ -176,6 +216,7 @@ impl SshSession {
 
     /// Open an interactive shell with a PTY of the given size.
     pub async fn open_shell(&self, cols: u16, rows: u16) -> Result<ShellChannel, SshError> {
+        debug!(cols, rows, term = %self.term, "shell: opening session channel");
         let channel = self.handle.channel_open_session().await?;
         let (mut read_half, write_half) = channel.split();
         write_half
@@ -190,6 +231,7 @@ impl SshSession {
             )
             .await?;
         write_half.request_shell(true).await?;
+        debug!("shell: pty + shell granted");
 
         let (out_tx, out_rx) = mpsc::channel::<Bytes>(OUTPUT_QUEUE_DEPTH);
         let (pause_tx, mut pause_rx) = watch::channel(false);
@@ -334,28 +376,39 @@ async fn authenticate(
             && !remaining.is_empty()
             && !remaining.contains(&method_kind(method))
         {
+            debug!(method = %label, "auth: skipped — server did not offer it");
             attempts.push(format!("{label}: not offered by server"));
             continue;
         }
 
+        debug!(method = %label, "auth: attempting");
         match try_method(handle, &cfg.username, method).await {
-            Ok(AuthResult::Success) => return Ok(()),
+            Ok(AuthResult::Success) => {
+                info!(method = %label, "auth: accepted");
+                return Ok(());
+            }
             Ok(AuthResult::Failure {
                 remaining_methods, ..
             }) => {
+                debug!(method = %label, "auth: rejected by server");
                 attempts.push(format!("{label}: rejected"));
                 offered = Some(remaining_methods);
             }
             // Never reached the server; the next method may still work.
-            Err(e) => attempts.push(format!("{label}: {e}")),
+            Err(e) => {
+                debug!(method = %label, error = %e, "auth: could not attempt — trying next");
+                attempts.push(format!("{label}: {e}"));
+            }
         }
     }
 
-    Err(SshError::AuthFailed(if attempts.is_empty() {
+    let detail = if attempts.is_empty() {
         "no authentication methods configured".to_owned()
     } else {
         attempts.join("; ")
-    }))
+    };
+    warn!(detail = %detail, "auth: no method succeeded");
+    Err(SshError::AuthFailed(detail))
 }
 
 /// Attempt a single method.
@@ -472,11 +525,13 @@ async fn authenticate_with_agent(
     handle: &mut client::Handle<ClientHandler>,
     user: &str,
 ) -> Result<AuthResult, SshError> {
+    debug!("agent: connecting");
     let mut agent = connect_agent().await?;
     let identities = agent
         .request_identities()
         .await
         .map_err(|e| SshError::Agent(e.to_string()))?;
+    debug!(count = identities.len(), "agent: identities loaded");
     if identities.is_empty() {
         return Err(SshError::Agent("no identities loaded".into()));
     }

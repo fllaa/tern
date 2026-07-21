@@ -8,6 +8,35 @@ mod session_cfg;
 mod store_commands;
 
 use tauri::Manager as _;
+use tracing_subscriber::EnvFilter;
+
+/// Install the tracing subscriber that turns the `tracing` events scattered
+/// through the connect/auth/session paths into lines in the `bun run tauri dev`
+/// terminal.
+///
+/// Filtering resolves in order: `RUST_LOG`, then `TERN_LOG`, then a built-in
+/// default. The default is build-aware — a debug build (what `tauri dev`
+/// produces) shows Tern's own crates at `debug` while keeping russh and tokio at
+/// `warn`, so a connect trace is legible instead of buried; a release build
+/// stays quiet unless asked. Override either way, e.g.
+/// `RUST_LOG=tern_core_ssh=trace bun run tauri dev`.
+///
+/// `try_init` rather than `init`: it returns instead of panicking if a
+/// subscriber is already installed (a test harness, a second call), which is
+/// never worth aborting startup over. Secrets never reach here — `AuthMethod`'s
+/// `Debug` redacts them at the source (see `core-ssh`'s `config.rs`).
+fn init_tracing() {
+    let default = if cfg!(debug_assertions) {
+        "warn,tern_lib=debug,tern_core_ssh=debug"
+    } else {
+        "warn"
+    };
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_from_env("TERN_LOG"))
+        .unwrap_or_else(|_| EnvFilter::new(default));
+
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
 
 /// Where the store and `known_hosts` live, under the OS app-config directory.
 ///
@@ -24,6 +53,7 @@ fn app_paths(app: &tauri::App) -> Result<(std::path::PathBuf, std::path::PathBuf
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     tauri::Builder::default()
         .setup(|app| {
             let (db_path, known_hosts_path) = app_paths(app)?;

@@ -33,6 +33,10 @@ tern-core-store.workspace = true
 tern-core-vault.workspace = true
 # Jitter for the reconnect backoff. Already vetted via core-ssh; same version.
 getrandom = "0.4"
+# Diagnostics. The facade emits from here and the core crates; the subscriber is
+# installed once, here, because only the binary may own the global default.
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints]
 workspace = true
