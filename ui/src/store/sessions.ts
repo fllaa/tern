@@ -26,6 +26,15 @@ export type ConnState =
   | "disconnected"
   | "error";
 
+/** Live reconnect progress, shown while `conn === "reconnecting"`. */
+export interface ReconnectInfo {
+  attempt: number;
+  /** The configured ceiling, or 0 for unlimited. */
+  max: number;
+  /** When this attempt fires, for a countdown. Epoch millis. */
+  dueAt: number;
+}
+
 export interface Tab {
   id: TabId;
   hostId: number | null;
@@ -36,6 +45,8 @@ export interface Tab {
   /** Why the tab is in `disconnected` or `error`. */
   detail?: string;
   exitCode?: number | null;
+  /** Non-null only while reconnecting. */
+  reconnect?: ReconnectInfo | null;
 }
 
 export interface SessionsState {
@@ -48,6 +59,7 @@ export interface SessionsState {
   setActive: (id: TabId) => void;
   moveTab: (id: TabId, toIndex: number) => void;
   setConn: (id: TabId, conn: ConnState, detail?: string) => void;
+  setReconnecting: (id: TabId, info: ReconnectInfo) => void;
   setRustSessionId: (id: TabId, sessionId: string | null) => void;
   setExit: (id: TabId, code: number | null) => void;
   renameTab: (id: TabId, title: string) => void;
@@ -128,7 +140,22 @@ export const useSessions = create<SessionsState>((set, get) => ({
     set((s) => {
       const tab = s.byId[id];
       if (!tab) return s;
-      return { byId: { ...s.byId, [id]: { ...tab, conn, detail } } };
+      // Any state other than `reconnecting` ends a reconnect, so its progress
+      // must not linger and mislead the diagnostics view.
+      return { byId: { ...s.byId, [id]: { ...tab, conn, detail, reconnect: null } } };
+    });
+  },
+
+  setReconnecting: (id, info) => {
+    set((s) => {
+      const tab = s.byId[id];
+      if (!tab) return s;
+      return {
+        byId: {
+          ...s.byId,
+          [id]: { ...tab, conn: "reconnecting", reconnect: info, detail: undefined },
+        },
+      };
     });
   },
 

@@ -147,3 +147,33 @@ describe("connection state", () => {
     expect(useSessions.getState().byId[a]).toBeUndefined();
   });
 });
+
+describe("reconnect state", () => {
+  it("setReconnecting moves the tab into reconnecting with progress", () => {
+    const { openTab, setReconnecting } = useSessions.getState();
+    const a = openTab({ hostId: 1, title: "a" });
+    setReconnecting(a, { attempt: 2, max: 10, dueAt: 1234 });
+
+    const tab = useSessions.getState().byId[a];
+    expect(tab.conn).toBe("reconnecting");
+    expect(tab.reconnect).toEqual({ attempt: 2, max: 10, dueAt: 1234 });
+  });
+
+  it("any non-reconnecting state clears the reconnect progress", () => {
+    // Left dangling, the old attempt/countdown would keep showing after the
+    // session reconnected or gave up.
+    const { openTab, setReconnecting, setConn } = useSessions.getState();
+    const a = openTab({ hostId: 1, title: "a" });
+    setReconnecting(a, { attempt: 3, max: 10, dueAt: 9999 });
+
+    setConn(a, "connected");
+    expect(useSessions.getState().byId[a].reconnect).toBeNull();
+  });
+
+  it("reconnecting a closed tab is ignored rather than a crash", () => {
+    const { openTab, closeTab, setReconnecting } = useSessions.getState();
+    const a = openTab({ hostId: 1, title: "a" });
+    closeTab(a);
+    expect(() => setReconnecting(a, { attempt: 1, max: 5, dueAt: 0 })).not.toThrow();
+  });
+});

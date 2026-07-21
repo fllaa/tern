@@ -72,13 +72,33 @@ export async function connect({
 function handleEvent(tabId: TabId, ev: SessionEvent): void {
   const store = useSessions.getState();
   switch (ev.event) {
+    case "connected":
+      // Either the initial connect's own event or a successful reconnect. The
+      // session id is unchanged; just clear any reconnecting state.
+      store.setConn(tabId, "connected");
+      break;
+    case "reconnecting":
+      // The transport dropped and the supervisor is retrying on the *same*
+      // session id, so the session stays put. Reset the now-stale flow state
+      // before the new generation's bytes arrive — carrying a pause or a
+      // pending-byte count across would throttle a producer that no longer
+      // exists. This is what makes flow state session-scoped per generation.
+      sessions.get(tabId)?.resetFlowState();
+      sessions.get(tabId)?.resetJsStats();
+      store.setReconnecting(tabId, {
+        attempt: ev.attempt,
+        max: ev.max_attempts,
+        dueAt: Date.now() + ev.delay_ms,
+      });
+      break;
     case "exited":
       sessions.delete(tabId);
       store.setExit(tabId, ev.code);
       break;
     case "disconnected":
       // Distinct from `exited`: the transport died rather than the shell
-      // ending. This is the event auto-reconnect will hang off.
+      // ending. Reached only when the supervisor has *given up* reconnecting —
+      // an in-progress reconnect is `reconnecting`, not this.
       sessions.delete(tabId);
       store.setConn(tabId, "disconnected", ev.reason);
       store.setRustSessionId(tabId, null);

@@ -18,6 +18,7 @@ import {
 import { HostNewDialog } from "./components/HostNewDialog";
 import { HostSidebar } from "./components/HostSidebar";
 import { PasteWarningDialog } from "./components/PasteWarningDialog";
+import { SessionOverlay, StatusPill } from "./components/SessionStatus";
 import { SessionTabs } from "./components/SessionTabs";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { TerminalMount } from "./components/TerminalMount";
@@ -132,23 +133,12 @@ export default function App() {
     });
   }, []);
 
-  const openHost = useCallback(
-    async (hostId: number) => {
-      const host = hosts.find((h) => h.id === hostId);
-      if (!host) return;
-
-      // Font before terminal: xterm's WebGL renderer caches a glyph atlas from
-      // whatever font is loaded when the Terminal is constructed, and a
-      // fallback measured there stays wrong for the session's whole life.
-      await pool.waitForTerminalFont();
-
-      const tabId = openTab({ hostId, title: host.name });
-      const handle = pool.acquire(tabId);
-      handle.term.onData((data) => controller.write(tabId, data));
-      handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
-      wireClipboard(tabId, handle);
-
-      await controller.connect({
+  // The connect call, shared by opening a host and reconnecting an existing
+  // tab. Reconnecting reuses the tab's terminal (and its already-wired data and
+  // resize handlers), so this must not touch the pool — only re-bind a session.
+  const runConnect = useCallback(
+    (tabId: string, hostId: number) =>
+      controller.connect({
         tabId,
         hostId,
         onHostKey: (ev) =>
@@ -167,10 +157,41 @@ export default function App() {
             );
           }
         },
-      });
+      }),
+    [],
+  );
+
+  const openHost = useCallback(
+    async (hostId: number) => {
+      const host = hosts.find((h) => h.id === hostId);
+      if (!host) return;
+
+      // Font before terminal: xterm's WebGL renderer caches a glyph atlas from
+      // whatever font is loaded when the Terminal is constructed, and a
+      // fallback measured there stays wrong for the session's whole life.
+      await pool.waitForTerminalFont();
+
+      const tabId = openTab({ hostId, title: host.name });
+      const handle = pool.acquire(tabId);
+      handle.term.onData((data) => controller.write(tabId, data));
+      handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
+      wireClipboard(tabId, handle);
+
+      await runConnect(tabId, hostId);
       void refresh(query);
     },
-    [hosts, openTab, query, refresh, wireClipboard],
+    [hosts, openTab, query, refresh, wireClipboard, runConnect],
+  );
+
+  // Manual reconnect for a tab the supervisor gave up on. The terminal and its
+  // handlers are still in the pool (the tab never closed), so this only needs
+  // to bind a fresh session to it.
+  const reconnectTab = useCallback(
+    (tabId: string) => {
+      const tab = useSessions.getState().byId[tabId];
+      if (tab?.hostId != null) void runConnect(tabId, tab.hostId);
+    },
+    [runConnect],
   );
 
   const onCloseTab = useCallback(
@@ -317,17 +338,20 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <TerminalMount />
+                <>
+                  {activeTab && (
+                    <SessionOverlay
+                      tab={activeTab}
+                      onReconnect={() => reconnectTab(activeTab.id)}
+                    />
+                  )}
+                  <TerminalMount />
+                </>
               )}
             </main>
 
             <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-[var(--lilt-border)] px-3 text-[11px] text-[var(--lilt-text-subtle)]">
-              {activeTab && (
-                <span>
-                  {activeTab.title} · {activeTab.conn}
-                  {activeTab.detail ? ` — ${activeTab.detail}` : ""}
-                </span>
-              )}
+              {activeTab && <StatusPill tab={activeTab} />}
               <span className="ml-auto font-mono">{flowLine}</span>
             </footer>
             {notice && (

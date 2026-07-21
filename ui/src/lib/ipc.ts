@@ -63,6 +63,10 @@ export type SessionEvent =
       known_hosts_line: number;
     }
   | { event: "connected" }
+  // A reconnect attempt is scheduled after a transport drop. Informational —
+  // the session id and terminal are unchanged; "connected" follows on success,
+  // "disconnected" when the supervisor gives up.
+  | { event: "reconnecting"; attempt: number; max_attempts: number; delay_ms: number }
   // Transport died. Distinct from "exited", which is a shell ending normally.
   | { event: "disconnected"; reason: string }
   | { event: "exited"; code: number | null }
