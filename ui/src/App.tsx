@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
@@ -23,6 +24,7 @@ import { TerminalMount } from "./components/TerminalMount";
 import {
   type Folder,
   type Host,
+  keyringStatus,
   listFolders,
   listHosts,
   removeKnownHost,
@@ -42,6 +44,10 @@ export default function App() {
 
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  // Non-null when this machine has no working credential store. A persistent
+  // banner rather than a transient notice: it changes what "remember my
+  // password" can mean, and stays true for the whole session.
+  const [keyringWarning, setKeyringWarning] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<HostKeyPrompt | null>(null);
   const [changed, setChanged] = useState<ChangedKey | null>(null);
   const [pastePending, setPastePending] = useState<{
@@ -73,6 +79,19 @@ export default function App() {
   useEffect(() => {
     void refresh(query);
   }, [query, refresh]);
+
+  // Probe the credential store once at startup. A failure to even ask is
+  // treated as "no store" — the honest default is to warn rather than to
+  // assume it works and silently drop saved secrets.
+  useEffect(() => {
+    keyringStatus()
+      .then((status) => {
+        if (!status.available) {
+          setKeyringWarning(status.reason ?? "The OS credential store is unavailable.");
+        }
+      })
+      .catch((err) => setKeyringWarning(String(err)));
+  }, []);
 
   /** Copy-on-select, and route multi-line pastes through a confirmation. */
   const wireClipboard = useCallback((tabId: string, handle: pool.TerminalHandle) => {
@@ -277,6 +296,15 @@ export default function App() {
 
         <ResizablePanel id="terminals">
           <div className="flex h-full min-w-0 flex-col bg-[var(--lilt-surface)]">
+            {keyringWarning && (
+              <Alert variant="warning" className="m-3 rounded-[var(--radius-card)]">
+                <AlertTitle>Credentials can't be saved on this machine</AlertTitle>
+                <AlertDescription>
+                  {keyringWarning} Passwords and key passphrases will be asked for each
+                  time instead of remembered.
+                </AlertDescription>
+              </Alert>
+            )}
             {order.length > 0 && (
               <SessionTabs onClose={onCloseTab} onNew={() => setAdding(true)} />
             )}

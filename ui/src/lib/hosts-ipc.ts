@@ -24,6 +24,8 @@ export interface Host {
   port: number;
   username: string;
   auth: AuthKind;
+  /** Methods to try after `auth` fails, in order. Empty means no fallback. */
+  authFallbacks: AuthKind[];
   /** Whether a credential is stored. The secret itself never crosses the IPC
    *  boundary, and neither does the keyring account name it lives under. */
   hasSecret: boolean;
@@ -45,6 +47,7 @@ export interface NewHost {
   port?: number;
   username?: string;
   auth: AuthKind;
+  authFallbacks?: AuthKind[];
   keyPath?: string | null;
   overrides?: HostOverrides;
   proxyJump?: string | null;
@@ -101,6 +104,48 @@ export type SecretUpdate =
   | { action: "unchanged" }
   | { action: "set"; secret: string }
   | { action: "clear" };
+
+/** Whether this machine can store credentials, and why not when it cannot. */
+export interface KeyringStatus {
+  available: boolean;
+  /** The platform's own message when unavailable — kept verbatim because it is
+   *  what distinguishes "D-Bus is not running" from "the keyring is locked". */
+  reason: string | null;
+}
+
+/**
+ * What a private key file turned out to be.
+ *
+ * `algorithm` and `fingerprint` are null when the format encrypts them away
+ * (PEM, PKCS#8): "not knowable until unlocked", not "absent". OpenSSH and .ppk
+ * keep that metadata in cleartext and report it even while locked.
+ */
+export interface KeyInfo {
+  format: "openssh" | "pem" | "pkcs8" | "ppk";
+  ppkVersion: number | null;
+  encrypted: boolean;
+  algorithm: string | null;
+  fingerprint: string | null;
+  comment: string | null;
+}
+
+// ── auth: credential store, key import ─────────────────────────────────────
+
+/** Probe the OS credential store. Cheap and side-effect free. */
+export const keyringStatus = (): Promise<KeyringStatus> => invoke("keyring_status");
+
+/** Describe a private key file without unlocking it. Never fails on an
+ *  encrypted key — that is the case it exists to report. */
+export const inspectKey = (path: string): Promise<KeyInfo> =>
+  invoke("inspect_key", { path });
+
+/** Check a passphrase against a key file. Pass null for an unencrypted key.
+ *  Rejects if the passphrase is wrong, so a bad one is caught before it is
+ *  written to the keyring rather than at connect time. */
+export const verifyKeyPassphrase = (
+  path: string,
+  passphrase: string | null,
+): Promise<KeyInfo> => invoke("verify_key_passphrase", { path, passphrase });
 
 // ── hosts ────────────────────────────────────────────────────────────────
 

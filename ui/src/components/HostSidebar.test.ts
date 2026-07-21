@@ -12,6 +12,7 @@ function host(id: number, name: string, folderId: number | null = null): Host {
     port: 22,
     username: "",
     auth: "agent",
+    authFallbacks: [],
     hasSecret: false,
     keyPath: null,
     overrides: {},
