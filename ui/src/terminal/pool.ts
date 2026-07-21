@@ -33,14 +33,18 @@
 // keeps working for background tabs exactly as it does for the foreground one.
 
 import { FitAddon } from "@xterm/addon-fit";
+import type { ISearchOptions } from "@xterm/addon-search";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 
 import type { TabId } from "../store/sessions";
-import { terminalTheme } from "./theme";
+import { searchDecorations, terminalTheme } from "./theme";
 
 export interface TerminalHandle {
   term: Terminal;
   fit: FitAddon;
+  /** Scrollback search. One per terminal so results survive a tab switch. */
+  search: SearchAddon;
   /** The element `term.open()` was called on. Always in the document. */
   host: HTMLDivElement;
   renderer: "webgl" | "dom";
@@ -102,6 +106,8 @@ export function acquire(id: TabId, opts = DEFAULT_TERMINAL_OPTIONS): TerminalHan
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon();
+  term.loadAddon(search);
 
   const host = document.createElement("div");
   host.style.width = "100%";
@@ -112,6 +118,7 @@ export function acquire(id: TabId, opts = DEFAULT_TERMINAL_OPTIONS): TerminalHan
   const handle: TerminalHandle = {
     term,
     fit,
+    search,
     host,
     renderer: "dom",
     webgl: null,
@@ -212,6 +219,47 @@ export function restyleAll(opts: Partial<TerminalOptions>): void {
     (handle.webgl as { clearTextureAtlas?: () => void } | null)?.clearTextureAtlas?.();
     safeFit(handle);
   }
+}
+
+/** Result of a search, as the addon reports it. */
+export interface SearchResults {
+  resultIndex: number;
+  resultCount: number;
+}
+
+function withDecorations(opts?: Partial<ISearchOptions>): ISearchOptions {
+  return { decorations: searchDecorations(), ...opts };
+}
+
+/** Find the next match, scrolling it into view. Returns whether one was found. */
+export function searchNext(
+  id: TabId,
+  query: string,
+  opts?: Partial<ISearchOptions>,
+): boolean {
+  return pool.get(id)?.search.findNext(query, withDecorations(opts)) ?? false;
+}
+
+/** Find the previous match. */
+export function searchPrev(
+  id: TabId,
+  query: string,
+  opts?: Partial<ISearchOptions>,
+): boolean {
+  return pool.get(id)?.search.findPrevious(query, withDecorations(opts)) ?? false;
+}
+
+/** Drop all match highlighting — for closing the search bar. */
+export function searchClear(id: TabId): void {
+  pool.get(id)?.search.clearDecorations();
+}
+
+/** Subscribe to result-count changes; returns an unsubscribe. */
+export function onSearchResults(id: TabId, cb: (r: SearchResults) => void): () => void {
+  const handle = pool.get(id);
+  if (!handle) return () => {};
+  const sub = handle.search.onDidChangeResults(cb);
+  return () => sub.dispose();
 }
 
 /** Tear a terminal down for good. */

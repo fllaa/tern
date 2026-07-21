@@ -23,6 +23,7 @@ import { SessionOverlay, StatusPill } from "./components/SessionStatus";
 import { SessionTabs } from "./components/SessionTabs";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { TerminalMount } from "./components/TerminalMount";
+import { TerminalSearch } from "./components/TerminalSearch";
 import {
   type Folder,
   type Host,
@@ -48,6 +49,7 @@ export default function App() {
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [searching, setSearching] = useState(false);
   // Non-null when this machine has no working credential store. A persistent
   // banner rather than a transient notice: it changes what "remember my
   // password" can mean, and stays true for the whole session.
@@ -93,6 +95,11 @@ export default function App() {
       if (shortcut === "palette") {
         e.preventDefault();
         setPalette((open) => !open);
+      } else if (shortcut === "search") {
+        e.preventDefault();
+        // Only meaningful with a session on screen; the bar targets the active
+        // tab's terminal.
+        if (useSessions.getState().activeId) setSearching(true);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -366,6 +373,13 @@ export default function App() {
                     <SessionOverlay
                       tab={activeTab}
                       onReconnect={() => reconnectTab(activeTab.id)}
+                    />
+                  )}
+                  {activeTab && searching && (
+                    <TerminalSearch
+                      key={activeTab.id}
+                      tabId={activeTab.id}
+                      onClose={() => setSearching(false)}
                     />
                   )}
                   <TerminalMount />

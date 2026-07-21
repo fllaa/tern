@@ -4,7 +4,11 @@
 // theme — including the light/dark flip — without a second palette to keep in
 // sync. xterm needs concrete colour strings; it cannot consume `var()`.
 
+import type { ISearchOptions } from "@xterm/addon-search";
 import type { ITheme } from "@xterm/xterm";
+
+/** The decorations shape, extracted since the addon does not export it by name. */
+type SearchDecorations = NonNullable<ISearchOptions["decorations"]>;
 
 function token(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -60,6 +64,25 @@ const ANSI_LIGHT = {
 function isDark(): boolean {
   const root = document.documentElement;
   return root.classList.contains("dark") || root.dataset.theme === "dark";
+}
+
+/**
+ * Match highlighting for scrollback search.
+ *
+ * The addon requires `#RRGGBB` strings (no alpha, no `var()`), so these read
+ * concrete token values with hex fallbacks — the highlight token for matches,
+ * the primary for the active one, so it stands out from the rest.
+ */
+export function searchDecorations(): SearchDecorations {
+  const dark = isDark();
+  const match = token("--lilt-highlight", dark ? "#5d532c" : "#fbe7a1");
+  const active = token("--lilt-primary", dark ? "#a5e5c6" : "#1f6f4a");
+  return {
+    matchBackground: match,
+    matchOverviewRuler: match,
+    activeMatchBackground: active,
+    activeMatchColorOverviewRuler: active,
+  };
 }
 
 export function terminalTheme(): ITheme {
