@@ -23,6 +23,7 @@ import {
 import { Field, FieldControl, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 
 import {
   credentialedKind,
@@ -55,6 +56,7 @@ export function HostNewDialog({
   const [then, setThen] = useState<AuthKind | "none">("none");
   const [keyPath, setKeyPath] = useState("");
   const [secret, setSecret] = useState("");
+  const [reconnect, setReconnect] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -135,6 +137,9 @@ export function HostNewDialog({
           auth: first,
           authFallbacks: then === "none" ? [] : [then],
           keyPath: usesKey ? keyPath.trim() || null : null,
+          // Only the opt-out is stored; leaving it on inherits the global
+          // default, so a later change to that default still reaches this host.
+          overrides: reconnect ? undefined : { reconnectEnabled: false },
         },
         store || undefined,
       );
@@ -286,6 +291,17 @@ export function HostNewDialog({
               </p>
             </Field>
           )}
+
+          <div className="flex items-center justify-between gap-3">
+            <span id="reconnect-label" className="text-sm text-[var(--lilt-text)]">
+              Reconnect automatically if the connection drops
+            </span>
+            <Switch
+              checked={reconnect}
+              onCheckedChange={setReconnect}
+              aria-labelledby="reconnect-label"
+            />
+          </div>
 
           {error && <p className="text-xs text-[var(--lilt-danger-text)]">{error}</p>}
         </div>
