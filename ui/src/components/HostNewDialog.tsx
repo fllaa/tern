@@ -9,6 +9,7 @@
 // at most one credential-bearing method (see lib/auth-chain), so the single
 // secret field is always unambiguous.
 
+import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +89,18 @@ export function HostNewDialog({
     setThen((prev) =>
       prev !== "none" && fallbackOptions(k).includes(prev) ? prev : "none",
     );
+  };
+
+  // Native file picker for the key path. No extension filter — OpenSSH keys
+  // (id_ed25519, id_rsa) carry none, so filtering by suffix would hide them.
+  const browseKey = async () => {
+    try {
+      const picked = await pickFile({ multiple: false, directory: false });
+      if (typeof picked === "string") setKeyPath(picked);
+    } catch {
+      // Cancelling the dialog, or a picker error, is a no-op — the path field
+      // is still there to type into.
+    }
   };
 
   useEffect(() => {
@@ -292,15 +305,22 @@ export function HostNewDialog({
           {usesKey && (
             <Field>
               <FieldLabel>Private key path</FieldLabel>
-              <FieldControl
-                render={
-                  <Input
-                    placeholder="~/.ssh/id_ed25519"
-                    value={keyPath}
-                    onChange={(e) => setKeyPath(e.target.value)}
+              <div className="flex gap-2">
+                <div className="min-w-0 flex-1">
+                  <FieldControl
+                    render={
+                      <Input
+                        placeholder="~/.ssh/id_ed25519"
+                        value={keyPath}
+                        onChange={(e) => setKeyPath(e.target.value)}
+                      />
+                    }
                   />
-                }
-              />
+                </div>
+                <Button variant="secondary" onClick={() => void browseKey()}>
+                  Browse…
+                </Button>
+              </div>
               {inspecting && (
                 <p className="flex items-center gap-1.5 text-xs text-[var(--lilt-text-subtle)]">
                   <Spinner size={12} /> Inspecting…

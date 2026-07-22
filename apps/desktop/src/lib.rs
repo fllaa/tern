@@ -55,6 +55,7 @@ fn app_paths(app: &tauri::App) -> Result<(std::path::PathBuf, std::path::PathBuf
 pub fn run() {
     init_tracing();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let (db_path, known_hosts_path) = app_paths(app)?;
             let store = tern_core_store::Store::open(&db_path)

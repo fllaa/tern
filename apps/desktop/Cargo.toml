@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 # No "devtools" feature: debug builds get the inspector automatically; the
 # feature would ship it in release builds.
 tauri = { version = "2", features = [] }
+# Native file picker for the "Browse…" key-path button. Desktop-only surface.
+tauri-plugin-dialog = "2"
 tern-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
