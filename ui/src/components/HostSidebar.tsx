@@ -110,8 +110,24 @@ export function HostSidebar({
           {node.label}
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onClick={() => onEditHost(host)}>Edit…</ContextMenuItem>
-          <ContextMenuItem variant="danger" onClick={() => onDeleteHost(host)}>
+          {/* React routes events from a portalled menu up the *component* tree,
+              so without stopPropagation a menu-item click bubbles into the tree
+              row's onClick and opens a session. Edit/Delete must not connect. */}
+          <ContextMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditHost(host);
+            }}
+          >
+            Edit…
+          </ContextMenuItem>
+          <ContextMenuItem
+            variant="danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteHost(host);
+            }}
+          >
             Delete…
           </ContextMenuItem>
         </ContextMenuContent>
