@@ -4,6 +4,12 @@
 // pooled terminals, which must not be mounted or unmounted by anything except
 // the pool. So the strip is bespoke and the terminals stay where they are.
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
 
 import { type ConnState, type Tab, useSessions } from "../store/sessions";
@@ -70,10 +76,12 @@ function TabButton({
 
 export function SessionTabs({
   onClose,
-  onNew,
+  onNewLocalShell,
+  onConnectHost,
 }: {
   onClose: (id: string) => void;
-  onNew: () => void;
+  onNewLocalShell: () => void;
+  onConnectHost: () => void;
 }) {
   const order = useSessions((s) => s.order);
   const byId = useSessions((s) => s.byId);
@@ -95,14 +103,18 @@ export function SessionTabs({
           />
         );
       })}
-      <button
-        type="button"
-        aria-label="New session"
-        className="shrink-0 px-3 text-[var(--lilt-text-subtle)] hover:bg-[var(--lilt-surface)] hover:text-[var(--lilt-text)]"
-        onClick={onNew}
-      >
-        +
-      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label="New session"
+          className="shrink-0 px-3 text-[var(--lilt-text-subtle)] hover:bg-[var(--lilt-surface)] hover:text-[var(--lilt-text)]"
+        >
+          +
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={onNewLocalShell}>New local shell</DropdownMenuItem>
+          <DropdownMenuItem onClick={onConnectHost}>Connect to host…</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

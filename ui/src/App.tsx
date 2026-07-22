@@ -263,6 +263,27 @@ export default function App() {
     [hosts, openTab, query, refresh, wireClipboard, runConnect],
   );
 
+  // A local shell tab: identical terminal wiring to a host, but the session is
+  // a local PTY (the platform's default login shell) with no host and no
+  // host-key prompt. There is no `runConnect` here because there is nothing to
+  // trust on first contact.
+  const openLocalShell = useCallback(async () => {
+    await pool.waitForTerminalFont();
+
+    const tabId = openTab({ hostId: null, title: "Local shell" });
+    const handle = pool.acquire(tabId);
+    handle.term.onData((data) => controller.write(tabId, data));
+    handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
+    wireClipboard(tabId, handle);
+
+    await controller.connectLocal({
+      tabId,
+      onEvent: (ev) => {
+        if (ev.event === "warning") setNotice(ev.message);
+      },
+    });
+  }, [openTab, wireClipboard]);
+
   // Manual reconnect for a tab the supervisor gave up on. The terminal and its
   // handlers are still in the pool (the tab never closed), so this only needs
   // to bind a fresh session to it.
@@ -456,15 +477,26 @@ export default function App() {
               </Alert>
             )}
             {order.length > 0 && (
-              <SessionTabs onClose={onCloseTab} onNew={() => setAdding(true)} />
+              <SessionTabs
+                onClose={onCloseTab}
+                onNewLocalShell={() => void openLocalShell()}
+                onConnectHost={() => setPalette(true)}
+              />
             )}
 
             <main className="relative min-h-0 flex-1">
               {order.length === 0 ? (
-                <div className="flex h-full items-center justify-center">
+                <div className="flex h-full flex-col items-center justify-center gap-3">
                   <p className="text-sm text-[var(--lilt-text-subtle)]">
                     Select a host to open a session.
                   </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void openLocalShell()}
+                  >
+                    New local shell
+                  </Button>
                 </div>
               ) : (
                 <>

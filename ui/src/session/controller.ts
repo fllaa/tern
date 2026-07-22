@@ -4,7 +4,7 @@
 // the `TermSession` objects, whose `flow` field mutates on every frame, live
 // here in a module-level map instead of in React state.
 
-import type { HostKeyDecision, SessionEvent } from "../lib/ipc";
+import type { HostKeyDecision, SessionEvent, Target } from "../lib/ipc";
 import { TermSession } from "../lib/ipc";
 import { type TabId, useSessions } from "../store/sessions";
 import * as pool from "../terminal/pool";
@@ -24,13 +24,17 @@ export interface ConnectArgs {
   onEvent?: (ev: SessionEvent) => void;
 }
 
-/** Connect a tab to a stored host. */
-export async function connect({
-  tabId,
-  hostId,
-  onHostKey,
-  onEvent,
-}: ConnectArgs): Promise<void> {
+/**
+ * Open a session for a tab against any target, mediating the close/connect
+ * race. Target-agnostic: the saved-host and local-shell entry points below
+ * differ only in the `Target` they pass.
+ */
+async function establish(
+  tabId: TabId,
+  target: Target,
+  onEvent?: (ev: SessionEvent) => void,
+  onHostKey?: HostKeyDecision,
+): Promise<void> {
   const handle = pool.get(tabId);
   if (!handle || sessions.has(tabId)) return;
 
@@ -41,13 +45,7 @@ export async function connect({
   try {
     const session = await TermSession.open(
       handle.term,
-      {
-        // No credential crosses the boundary — Rust resolves the stored
-        // host's secret from the OS keyring itself.
-        target: { kind: "saved_host", host_id: hostId },
-        cols: handle.term.cols,
-        rows: handle.term.rows,
-      },
+      { target, cols: handle.term.cols, rows: handle.term.rows },
       (ev) => {
         handleEvent(tabId, ev);
         onEvent?.(ev);
@@ -67,6 +65,41 @@ export async function connect({
   } catch (err) {
     useSessions.getState().setConn(tabId, "error", String(err));
   }
+}
+
+/** Connect a tab to a stored host. */
+export function connect({
+  tabId,
+  hostId,
+  onHostKey,
+  onEvent,
+}: ConnectArgs): Promise<void> {
+  // No credential crosses the boundary — Rust resolves the stored host's
+  // secret from the OS keyring itself.
+  return establish(tabId, { kind: "saved_host", host_id: hostId }, onEvent, onHostKey);
+}
+
+export interface ConnectLocalArgs {
+  tabId: TabId;
+  /** Explicit program to run; null runs the platform's default login shell. */
+  program?: string | null;
+  args?: string[];
+  onEvent?: (ev: SessionEvent) => void;
+}
+
+/**
+ * Connect a tab to a local shell.
+ *
+ * No host-key callback is threaded through: a local PTY never presents a host
+ * key, so `TermSession.open` never reaches for one.
+ */
+export function connectLocal({
+  tabId,
+  program = null,
+  args,
+  onEvent,
+}: ConnectLocalArgs): Promise<void> {
+  return establish(tabId, { kind: "local_pty", program, args }, onEvent);
 }
 
 function handleEvent(tabId: TabId, ev: SessionEvent): void {
