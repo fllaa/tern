@@ -51,6 +51,16 @@ fn keyring() -> OsKeyring {
     OsKeyring::new(KEYRING_SERVICE)
 }
 
+/// The raw stored secret for a host, if the keyring holds one.
+///
+/// Used by the connection test to stand in for a credential field the user left
+/// untouched while editing — the webview never receives the saved secret, so an
+/// unchanged field arrives empty and would otherwise fail auth with an empty
+/// credential. A missing or unreadable entry is simply `None`.
+pub fn stored_secret(host: &Host) -> Option<String> {
+    account_for(host).and_then(|account| keyring().get_password(&account).ok())
+}
+
 /// Store (or replace) a host's credential.
 pub fn set_secret(account: &str, secret: &str) -> Result<(), VaultError> {
     keyring().set_password(account, secret)

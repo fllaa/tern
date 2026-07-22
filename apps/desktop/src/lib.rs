@@ -67,6 +67,7 @@ pub fn run() {
             // session lifecycle
             commands::open_session,
             commands::approve_host_key,
+            commands::test_connection,
             commands::write_session,
             commands::resize_session,
             commands::pause_session,

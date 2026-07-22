@@ -2,7 +2,11 @@
 // the Phase 0 benchmark depends on — keeping product commands out of that file
 // means bench.ts can never be broken by host-manager churn.
 
-import { invoke } from "@tauri-apps/api/core";
+import { type Channel, invoke } from "@tauri-apps/api/core";
+
+// Type-only imports from ipc.ts — erased at build, so they cannot pull host
+// churn into the bench-critical module the split above guards against.
+import type { AuthMethodDto, SessionEvent } from "./ipc";
 
 export type AuthKind = "agent" | "key_file" | "password";
 
@@ -169,6 +173,35 @@ export const moveHost = (id: number, folderId: number | null): Promise<void> =>
 
 export const setHostTags = (id: number, tagIds: number[]): Promise<void> =>
   invoke("set_host_tags", { id, tagIds });
+
+/** A connection test's outcome, surfaced inline in the host form. */
+export interface TestConnectionResult {
+  ok: boolean;
+  /** The failure reason when `ok` is false. */
+  message?: string;
+}
+
+export interface TestConnectionReq {
+  host: string;
+  port: number;
+  username: string;
+  /** The chain to try, in order. At most one method carries a secret. */
+  auth: AuthMethodDto[];
+  /** Set when editing a saved host, so a credential field left blank falls back
+   *  to the host's stored secret (the webview never holds it to resend). */
+  host_id?: number | null;
+}
+
+/** Connect and authenticate with the given config, then disconnect — no shell,
+ *  no saved session. Resolves on success, rejects with the failure reason.
+ *  Host-key prompts arrive on `events`, answered via `approve_host_key` — the
+ *  same flow a real connect uses. */
+export function testConnection(
+  req: TestConnectionReq,
+  events: Channel<SessionEvent>,
+): Promise<void> {
+  return invoke("test_connection", { req, events });
+}
 
 // ── folders ──────────────────────────────────────────────────────────────
 

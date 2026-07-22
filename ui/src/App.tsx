@@ -1,5 +1,6 @@
 // Product shell: resizable sidebar, session tabs, pooled terminals.
 
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -48,8 +49,11 @@ import {
   listFolders,
   listHosts,
   removeKnownHost,
+  type TestConnectionReq,
+  type TestConnectionResult,
+  testConnection,
 } from "./lib/hosts-ipc";
-import type { HostKeyPrompt } from "./lib/ipc";
+import type { HostKeyPrompt, SessionEvent } from "./lib/ipc";
 import { matchShortcut } from "./lib/shortcuts";
 import * as controller from "./session/controller";
 import { useSessions } from "./store/sessions";
@@ -312,6 +316,29 @@ export default function App() {
     void refresh(query);
   }, [deleting, query, refresh]);
 
+  // Test a host's (possibly unsaved) config from the form. Host-key prompts ride
+  // the same FirstContactDialog a real connect uses: the events channel routes
+  // them to `setPrompt`, and the decision goes back via `approve_host_key`.
+  const runTest = useCallback(
+    (req: TestConnectionReq): Promise<TestConnectionResult> =>
+      new Promise((resolve) => {
+        const events = new Channel<SessionEvent>();
+        events.onmessage = (ev) => {
+          if (ev.event !== "host_key_prompt") return;
+          void new Promise<boolean>((decide) => {
+            decideRef.current = decide;
+            setPrompt(ev);
+          })
+            .then((accept) => invoke("approve_host_key", { id: ev.session_id, accept }))
+            .catch(() => {});
+        };
+        testConnection(req, events)
+          .then(() => resolve({ ok: true }))
+          .catch((e) => resolve({ ok: false, message: String(e) }));
+      }),
+    [],
+  );
+
   // Flow stats are read straight off the session object, never through the
   // store — that object mutates on every frame and would re-render at 100 Hz.
   useEffect(() => {
@@ -475,6 +502,7 @@ export default function App() {
       {adding && (
         <HostNewDialog
           onClose={() => setAdding(false)}
+          onTest={runTest}
           onSaved={() => {
             setAdding(false);
             void refresh(query);
@@ -485,6 +513,7 @@ export default function App() {
         <HostNewDialog
           key={editing.id}
           editing={editing}
+          onTest={runTest}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);

@@ -39,19 +39,25 @@ import {
   inspectKey,
   type KeyInfo,
   type SecretUpdate,
+  type TestConnectionReq,
+  type TestConnectionResult,
   updateHost,
   verifyKeyPassphrase,
 } from "../lib/hosts-ipc";
+import type { AuthMethodDto } from "../lib/ipc";
 
 const FIRST_METHODS: AuthKind[] = ["agent", "key_file", "password"];
 
 export function HostNewDialog({
   onClose,
   onSaved,
+  onTest,
   editing,
 }: {
   onClose: () => void;
   onSaved: () => void;
+  /** Try the current form values without saving; resolves to the outcome. */
+  onTest: (req: TestConnectionReq) => Promise<TestConnectionResult>;
   /** When set, the form edits this host in place instead of creating one. */
   editing?: Host;
 }) {
@@ -72,6 +78,8 @@ export function HostNewDialog({
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
 
   // Key inspection, driven by the key path whenever the chain uses a key.
   const [keyInfo, setKeyInfo] = useState<KeyInfo | null>(null);
@@ -101,6 +109,29 @@ export function HostNewDialog({
       // Cancelling the dialog, or a picker error, is a no-op — the path field
       // is still there to type into.
     }
+  };
+
+  // The chain as wire DTOs, the secret attached to its one credentialed method.
+  const authDtos = (): AuthMethodDto[] =>
+    chain.map((kind): AuthMethodDto => {
+      if (kind === "password") return { method: "password", password: secret };
+      if (kind === "key_file")
+        return { method: "key_file", path: keyPath.trim(), passphrase: secret || null };
+      return { method: "agent" };
+    });
+
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const result = await onTest({
+      host: hostname.trim(),
+      port: Number(port) || 22,
+      username: username.trim(),
+      auth: authDtos(),
+      host_id: editing?.id ?? null,
+    });
+    setTestResult(result);
+    setTesting(false);
   };
 
   useEffect(() => {
@@ -376,13 +407,40 @@ export function HostNewDialog({
           {error && <p className="text-xs text-[var(--lilt-danger-text)]">{error}</p>}
         </div>
 
+        {testResult && !testing && (
+          <p
+            className={`mt-4 text-xs ${
+              testResult.ok
+                ? "text-[var(--lilt-primary-text)]"
+                : "text-[var(--lilt-danger-text)]"
+            }`}
+          >
+            {testResult.ok ? "Connected ✓" : testResult.message}
+          </p>
+        )}
+
         <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
+          <Button
+            variant="secondary"
+            disabled={testing || !hostname.trim() || keyBlocks}
+            onClick={() => void test()}
+          >
+            {testing ? (
+              <>
+                <Spinner size={14} /> Testing…
+              </>
+            ) : (
+              "Test connection"
+            )}
           </Button>
-          <Button disabled={!canSave} onClick={() => void save()}>
-            Save
-          </Button>
+          <div className="ml-auto flex gap-3">
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button disabled={!canSave} onClick={() => void save()}>
+              Save
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

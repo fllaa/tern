@@ -25,7 +25,7 @@ use tern_core_ssh::{
 use tern_core_store::Store;
 use tern_proto::{
     AuthMethodDto, AutoBenchCfg, BenchReport, OpenSessionReq, ResizeReq, SessionEvent, SessionId,
-    StreamStatsDto, Target,
+    StreamStatsDto, Target, TestConnectionReq,
 };
 use tern_term_stream::{CoalescerConfig, StreamStats, coalesce};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
@@ -157,6 +157,23 @@ fn auth_from_dto(dto: AuthMethodDto) -> AuthMethod {
         AuthMethodDto::Password { password } => AuthMethod::password(password),
         AuthMethodDto::KeyFile { path, passphrase } => AuthMethod::key_file(path, passphrase),
         AuthMethodDto::Agent => AuthMethod::Agent,
+    }
+}
+
+/// Like [`auth_from_dto`], but for the connection test: a credentialed method
+/// left blank in the form — an edit whose secret the user did not retype — is
+/// filled from the host's stored keyring secret, which the webview never sees.
+fn auth_from_dto_or_stored(dto: AuthMethodDto, stored: Option<&str>) -> AuthMethod {
+    match dto {
+        AuthMethodDto::Password { password } if password.is_empty() => {
+            AuthMethod::password(stored.unwrap_or_default())
+        }
+        AuthMethodDto::KeyFile { path, passphrase }
+            if passphrase.as_deref().is_none_or(str::is_empty) =>
+        {
+            AuthMethod::key_file(path, stored.map(str::to_owned))
+        }
+        other => auth_from_dto(other),
     }
 }
 
@@ -879,6 +896,78 @@ pub async fn approve_host_key(
         warn!(session = %id, "approve_host_key: no pending prompt for this id");
         Err(format!("no pending host-key prompt for {id}"))
     }
+}
+
+/// Test an SSH connection with the current (unsaved) form values: connect and
+/// authenticate, then disconnect. Opens no shell and registers no session — it
+/// only answers "would this config connect?". Host-key prompts ride `events`
+/// and are answered by `approve_host_key`, exactly as a real connect's are.
+#[tauri::command]
+pub async fn test_connection(
+    state: State<'_, AppState>,
+    req: TestConnectionReq,
+    events: Channel<SessionEvent>,
+) -> Result<(), String> {
+    // Edit mode: a credentialed method the user did not retype arrives with an
+    // empty secret. Fill it from the host's keyring so the test uses the real
+    // credential rather than failing on a blank one.
+    let stored = match req.host_id {
+        None => None,
+        Some(id) => {
+            let store = state.store();
+            tauri::async_runtime::spawn_blocking(move || {
+                store
+                    .hosts()
+                    .get(id)
+                    .ok()
+                    .flatten()
+                    .and_then(|host| crate::auth::stored_secret(&host))
+            })
+            .await
+            .unwrap_or(None)
+        }
+    };
+
+    let auth: Vec<AuthMethod> = req
+        .auth
+        .into_iter()
+        .map(|dto| auth_from_dto_or_stored(dto, stored.as_deref()))
+        .collect();
+
+    let mut cfg = SessionConfig::new(req.host, req.username, AuthMethod::Agent);
+    cfg.port = req.port;
+    cfg.auth = auth;
+
+    let hash_new = {
+        let store = state.store();
+        tauri::async_runtime::spawn_blocking(move || {
+            store
+                .settings()
+                .get_or(tern_core_store::KEY_HASH_KNOWN_HOSTS, false)
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
+    };
+
+    // A distinct id namespace so the test's host-key prompt cannot collide with
+    // a concurrent real session's entry in the pending map.
+    let id = format!("test-{}", state.next_id.fetch_add(1, Ordering::Relaxed));
+    let on_host_key = host_key_prompt(
+        false,
+        Arc::clone(&state.pending_host_keys),
+        events,
+        id,
+        state.known_hosts_path(),
+        hash_new,
+    );
+
+    let session = SshSession::connect(cfg, on_host_key)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Authenticating is the whole test; close it cleanly.
+    session.disconnect().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

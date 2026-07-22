@@ -99,6 +99,23 @@ pub struct ResizeReq {
     pub rows: u16,
 }
 
+/// Test an SSH connection without opening a session: connect and authenticate
+/// with the given chain, then disconnect. No shell is opened and nothing is
+/// recorded — it only answers "would this config connect?".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestConnectionReq {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    /// The auth chain to try, in order — the form's primary method plus its
+    /// optional fallback. At most one carries a secret.
+    pub auth: Vec<AuthMethodDto>,
+    /// Set when editing a saved host, so a credentialed method the user left
+    /// untouched in the form (the webview never holds the saved secret) can be
+    /// filled from the host's keyring entry rather than failing on an empty one.
+    pub host_id: Option<i64>,
+}
+
 /// Low-frequency session lifecycle events (JSON channel; never terminal bytes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
