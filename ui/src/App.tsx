@@ -18,14 +18,16 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { dispatchKey, isBoundAccel } from "./commands/keymap";
+import type { CommandContext } from "./commands/types";
 import { AppearanceDialog } from "./components/AppearanceDialog";
+import { CommandPalette } from "./components/CommandPalette";
 import {
   type ChangedKey,
   ChangedKeyDialog,
   FirstContactDialog,
 } from "./components/HostKeyDialog";
 import { HostNewDialog } from "./components/HostNewDialog";
-import { HostPalette } from "./components/HostPalette";
 import { HostSidebar } from "./components/HostSidebar";
 import { PasteWarningDialog } from "./components/PasteWarningDialog";
 import { SessionOverlay, StatusPill } from "./components/SessionStatus";
@@ -54,9 +56,9 @@ import {
   testConnection,
 } from "./lib/hosts-ipc";
 import type { HostKeyPrompt, SessionEvent } from "./lib/ipc";
-import { matchShortcut } from "./lib/shortcuts";
+import { eventAccel } from "./lib/shortcuts";
 import * as controller from "./session/controller";
-import { useSessions } from "./store/sessions";
+import { relativeTab, tabAtIndex, useSessions } from "./store/sessions";
 import { assessPaste } from "./terminal/clipboard";
 import * as pool from "./terminal/pool";
 
@@ -73,6 +75,7 @@ export default function App() {
   const [importing, setImporting] = useState(false);
   const [palette, setPalette] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
   const [showAppearance, setShowAppearance] = useState(false);
   // Non-null when this machine has no working credential store. A persistent
@@ -96,6 +99,9 @@ export default function App() {
   // The host-key prompt is answered from a dialog, so the decision has to
   // travel back out of React state to the promise the connect is awaiting.
   const decideRef = useRef<((accept: boolean) => void) | null>(null);
+  // The command context, mirrored so the window keydown handler always
+  // dispatches against the latest closures without re-subscribing.
+  const cmdCtxRef = useRef<CommandContext | null>(null);
 
   const refresh = useCallback(async (q: string) => {
     try {
@@ -111,21 +117,13 @@ export default function App() {
     void refresh(query);
   }, [query, refresh]);
 
-  // App-level shortcuts. Bound on window (capture phase) so they fire even
-  // while a terminal holds focus — xterm lets these chords bubble because the
-  // terminal's own key handler returns false for them (see wireClipboard).
+  // App-level shortcuts. Bound on window so they fire even while a terminal
+  // holds focus — xterm lets bound chords bubble because the terminal's own key
+  // handler returns false for them (see wireClipboard). Dispatch reads the
+  // context through a ref so it always sees the latest closures.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const shortcut = matchShortcut(e);
-      if (shortcut === "palette") {
-        e.preventDefault();
-        setPalette((open) => !open);
-      } else if (shortcut === "search") {
-        e.preventDefault();
-        // Only meaningful with a session on screen; the bar targets the active
-        // tab's terminal.
-        if (useSessions.getState().activeId) setSearching(true);
-      }
+      if (cmdCtxRef.current) dispatchKey(e, cmdCtxRef.current);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -184,9 +182,9 @@ export default function App() {
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
 
-      // App chords (palette, search) must reach the window listener, not the
-      // shell. Returning false stops xterm from consuming them so they bubble.
-      if (matchShortcut(ev)) return false;
+      // Bound app chords must reach the window listener, not the shell.
+      // Returning false stops xterm from consuming them so they bubble.
+      if (isBoundAccel(eventAccel(ev))) return false;
 
       const accel = ev.metaKey || ev.ctrlKey;
       if (!accel) return true;
@@ -383,6 +381,38 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Every command's side effects funnel through this context, so the registry
+  // and keymap stay pure. Rebuilt each render and mirrored into the ref the
+  // window keydown handler reads, so dispatch always sees the latest closures.
+  const cmdCtx: CommandContext = {
+    openHost: (id) => void openHost(id),
+    openLocalShell: () => void openLocalShell(),
+    connectHostPrompt: () => setPalette(true),
+    focusSearch: () => {
+      if (useSessions.getState().activeId) setSearching(true);
+    },
+    togglePalette: () => setPalette((open) => !open),
+    closeActiveTab: () => {
+      const id = useSessions.getState().activeId;
+      if (id) onCloseTab(id);
+    },
+    selectRelativeTab: (delta) => {
+      const { order: tabs, activeId: current } = useSessions.getState();
+      const next = relativeTab(tabs, current, delta);
+      if (next) useSessions.getState().setActive(next);
+    },
+    selectTabByIndex: (oneBased) => {
+      const id = tabAtIndex(useSessions.getState().order, oneBased);
+      if (id) useSessions.getState().setActive(id);
+    },
+    selectTab: (id) => useSessions.getState().setActive(id),
+    renameActiveTab: () => {
+      const id = useSessions.getState().activeId;
+      if (id) setRenaming(id);
+    },
+  };
+  cmdCtxRef.current = cmdCtx;
+
   const activeTab = activeId ? byId[activeId] : null;
 
   return (
@@ -481,6 +511,14 @@ export default function App() {
                 onClose={onCloseTab}
                 onNewLocalShell={() => void openLocalShell()}
                 onConnectHost={() => setPalette(true)}
+                renaming={renaming}
+                onRename={(id, title) => {
+                  const next = title.trim();
+                  if (next) useSessions.getState().renameTab(id, next);
+                  setRenaming(null);
+                }}
+                onRenameStart={setRenaming}
+                onRenameCancel={() => setRenaming(null)}
               />
             )}
 
@@ -563,11 +601,11 @@ export default function App() {
           }}
         />
       )}
-      <HostPalette
-        hosts={hosts}
+      <CommandPalette
         open={palette}
         onOpenChange={setPalette}
-        onPick={(id) => void openHost(id)}
+        hosts={hosts}
+        ctx={cmdCtx}
       />
       {showAppearance && (
         <AppearanceDialog

@@ -1,0 +1,125 @@
+// The command registry: the fixed set of actions, plus lookups over it.
+//
+// Static commands carry the stable ids and keybindings. Dynamic host/tab
+// commands are composed in for the palette only (never keybound), so the
+// keymap resolves against the static set alone.
+
+import type { Host } from "../lib/hosts-ipc";
+import { type Tab, useSessions } from "../store/sessions";
+import { hostCommands } from "./hosts";
+import { tabCommands } from "./tabs";
+import type { Command } from "./types";
+
+const hasActiveTab = () => useSessions.getState().activeId != null;
+const hasMultipleTabs = () => useSessions.getState().order.length > 1;
+
+/** Cmd/Ctrl+Shift 1..8 select that tab; 9 selects the last. */
+function selectByIndexCommands(): Command[] {
+  const byIndex: Command[] = [];
+  for (let i = 1; i <= 8; i += 1) {
+    byIndex.push({
+      id: `tab.select${i}`,
+      title: `Select tab ${i}`,
+      group: "tabs",
+      keybinding: { key: String(i) },
+      enabled: () => useSessions.getState().order.length >= i,
+      run: (c) => c.selectTabByIndex(i),
+    });
+  }
+  byIndex.push({
+    id: "tab.selectLast",
+    title: "Select last tab",
+    group: "tabs",
+    keybinding: { key: "9" },
+    enabled: () => useSessions.getState().order.length > 0,
+    run: (c) => c.selectTabByIndex(useSessions.getState().order.length),
+  });
+  return byIndex;
+}
+
+export const STATIC_COMMANDS: Command[] = [
+  {
+    id: "palette.toggle",
+    title: "Command palette",
+    group: "view",
+    keybinding: { key: "k" },
+    hidden: true, // reachable by chord; listing it inside itself is noise
+    run: (c) => c.togglePalette(),
+  },
+  {
+    id: "search.focus",
+    title: "Find in terminal",
+    group: "view",
+    keywords: ["search", "find"],
+    keybinding: { key: "f" },
+    enabled: hasActiveTab,
+    run: (c) => c.focusSearch(),
+  },
+  {
+    id: "session.newLocalShell",
+    title: "New local shell",
+    group: "session",
+    keywords: ["terminal", "shell", "bash", "zsh", "pwsh", "pty"],
+    keybinding: { key: "t" },
+    run: (c) => c.openLocalShell(),
+  },
+  {
+    id: "session.connectHost",
+    title: "Connect to host…",
+    group: "session",
+    keywords: ["ssh", "open", "new session"],
+    run: (c) => c.connectHostPrompt(),
+  },
+  {
+    id: "tab.close",
+    title: "Close tab",
+    group: "tabs",
+    keybinding: { key: "w" },
+    enabled: hasActiveTab,
+    run: (c) => c.closeActiveTab(),
+  },
+  {
+    id: "tab.next",
+    title: "Next tab",
+    group: "tabs",
+    keybinding: { key: "]" },
+    enabled: hasMultipleTabs,
+    run: (c) => c.selectRelativeTab(1),
+  },
+  {
+    id: "tab.prev",
+    title: "Previous tab",
+    group: "tabs",
+    keybinding: { key: "[" },
+    enabled: hasMultipleTabs,
+    run: (c) => c.selectRelativeTab(-1),
+  },
+  {
+    id: "tab.rename",
+    title: "Rename tab",
+    group: "tabs",
+    keybinding: { key: "e" },
+    enabled: hasActiveTab,
+    run: (c) => c.renameActiveTab(),
+  },
+  ...selectByIndexCommands(),
+];
+
+/** A static command by id, or undefined if unknown or currently disabled.
+ *  The keymap dispatches through this, so a disabled command is a no-op
+ *  rather than an error. */
+export function commandById(id: string): Command | undefined {
+  const cmd = STATIC_COMMANDS.find((c) => c.id === id);
+  if (!cmd) return undefined;
+  if (cmd.enabled && !cmd.enabled()) return undefined;
+  return cmd;
+}
+
+/** Everything the palette lists: enabled, non-hidden static commands plus the
+ *  dynamic host and tab items. */
+export function paletteCommands(hosts: Host[], tabs: Tab[]): Command[] {
+  const staticVisible = STATIC_COMMANDS.filter(
+    (c) => !c.hidden && (!c.enabled || c.enabled()),
+  );
+  return [...staticVisible, ...hostCommands(hosts), ...tabCommands(tabs)];
+}

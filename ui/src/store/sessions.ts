@@ -86,6 +86,32 @@ export function neighbourOf(order: TabId[], closing: TabId): TabId | null {
   return order[idx + 1] ?? order[idx - 1] ?? null;
 }
 
+/**
+ * The tab `delta` steps from `active` in display order, wrapping at both ends.
+ * With no active tab it starts from the first. Returns null only when there are
+ * no tabs. Pure and exported for direct testing, like `neighbourOf`.
+ */
+export function relativeTab(
+  order: TabId[],
+  active: TabId | null,
+  delta: number,
+): TabId | null {
+  const len = order.length;
+  if (len === 0) return null;
+  const from = active ? order.indexOf(active) : -1;
+  // No active tab (or an unknown one): relative navigation lands on the first.
+  if (from === -1) return order[0];
+  return order[(((from + delta) % len) + len) % len];
+}
+
+/**
+ * The tab at a 1-based position, or null if out of range. "Select the last
+ * tab" is the caller's job — pass `order.length`.
+ */
+export function tabAtIndex(order: TabId[], oneBased: number): TabId | null {
+  return order[oneBased - 1] ?? null;
+}
+
 export const useSessions = create<SessionsState>((set, get) => ({
   order: [],
   byId: {},

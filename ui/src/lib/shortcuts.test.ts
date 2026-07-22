@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isAppAccel, matchShortcut } from "./shortcuts";
+import { accelLabel, eventAccel, isAppAccel, normalizeChord } from "./shortcuts";
 
 describe("isAppAccel", () => {
   it("accepts Cmd (macOS) and Ctrl+Shift (elsewhere)", () => {
@@ -14,25 +14,42 @@ describe("isAppAccel", () => {
   });
 });
 
-describe("matchShortcut", () => {
-  it("maps the app chords to actions", () => {
-    expect(
-      matchShortcut({ metaKey: true, ctrlKey: false, shiftKey: false, key: "k" }),
-    ).toBe("palette");
-    expect(
-      matchShortcut({ metaKey: true, ctrlKey: false, shiftKey: false, key: "F" }),
-    ).toBe("search");
+describe("normalizeChord", () => {
+  it("reads the physical key, not the shifted glyph", () => {
+    // The regression this guards: with Ctrl+Shift held, a digit's `key` is its
+    // shifted symbol ("!"), but its `code` is stable — so accelerators use code.
+    expect(normalizeChord({ code: "KeyK" })).toBe("k");
+    expect(normalizeChord({ code: "Digit1" })).toBe("1");
+    expect(normalizeChord({ code: "BracketRight" })).toBe("]");
+    expect(normalizeChord({ code: "BracketLeft" })).toBe("[");
   });
 
-  it("does not match a bare Ctrl chord", () => {
+  it("returns null for a key with no accelerator token", () => {
+    expect(normalizeChord({ code: "ShiftLeft" })).toBeNull();
+  });
+});
+
+describe("eventAccel", () => {
+  it("extracts the chord for an app-accel event, keyed by code", () => {
     expect(
-      matchShortcut({ metaKey: false, ctrlKey: true, shiftKey: false, key: "k" }),
-    ).toBeNull();
+      eventAccel({ metaKey: true, ctrlKey: false, shiftKey: false, code: "KeyK" }),
+    ).toEqual({ key: "k" });
+    // Ctrl+Shift+] — the browser reports key "}", but the token is from code.
+    expect(
+      eventAccel({ metaKey: false, ctrlKey: true, shiftKey: true, code: "BracketRight" }),
+    ).toEqual({ key: "]" });
   });
 
-  it("returns null for unmapped keys", () => {
+  it("is null for a bare Ctrl chord (readline territory)", () => {
     expect(
-      matchShortcut({ metaKey: true, ctrlKey: false, shiftKey: false, key: "j" }),
+      eventAccel({ metaKey: false, ctrlKey: true, shiftKey: false, code: "KeyK" }),
     ).toBeNull();
+  });
+});
+
+describe("accelLabel", () => {
+  it("includes the uppercased key regardless of platform", () => {
+    expect(accelLabel({ key: "k" })).toContain("K");
+    expect(accelLabel({ key: "]" })).toContain("]");
   });
 });

@@ -4,6 +4,7 @@
 // pooled terminals, which must not be mounted or unmounted by anything except
 // the pool. So the strip is bespoke and the terminals stay where they are.
 
+import { useRef } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,16 +28,27 @@ const STATE: Record<ConnState, { dot: string; label: string }> = {
 function TabButton({
   tab,
   active,
+  renaming,
   onSelect,
   onClose,
+  onRename,
+  onRenameStart,
+  onRenameCancel,
 }: {
   tab: Tab;
   active: boolean;
+  renaming: boolean;
   onSelect: () => void;
   onClose: () => void;
+  onRename: (title: string) => void;
+  onRenameStart: () => void;
+  onRenameCancel: () => void;
 }) {
   const state = STATE[tab.conn];
   const busy = tab.conn === "connecting" || tab.conn === "reconnecting";
+  // Enter and Escape both unmount the input, which fires onBlur; this flag stops
+  // that blur from committing a second time (Enter) or reviving a cancel (Escape).
+  const settled = useRef(false);
 
   return (
     <div
@@ -46,30 +58,62 @@ function TabButton({
           : "text-[var(--lilt-text-muted)] hover:bg-[var(--lilt-surface-2)]"
       }`}
     >
-      <button
-        type="button"
-        className="flex min-w-0 items-center gap-2"
-        onClick={onSelect}
-        title={tab.detail ? `${state.label} — ${tab.detail}` : state.label}
-      >
-        {busy ? (
-          <Spinner label={null} size={10} />
-        ) : (
-          <span
-            aria-hidden="true"
-            className={`size-1.5 shrink-0 rounded-full ${state.dot}`}
-          />
-        )}
-        <span className="max-w-40 truncate">{tab.title}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`Close ${tab.title}`}
-        className="shrink-0 rounded px-1 text-[var(--lilt-text-subtle)] opacity-0 transition-opacity hover:text-[var(--lilt-danger)] group-hover:opacity-100 focus-visible:opacity-100"
-        onClick={onClose}
-      >
-        ×
-      </button>
+      {renaming ? (
+        <input
+          // biome-ignore lint/a11y/noAutofocus: focusing the field IS the rename action
+          autoFocus
+          aria-label="Rename tab"
+          className="min-w-0 flex-1 rounded-[var(--radius-control-sm)] border border-[var(--lilt-focus)] bg-[var(--lilt-field)] px-1.5 py-0.5 text-xs text-[var(--lilt-text)] outline-none"
+          defaultValue={tab.title}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => {
+            if (settled.current) {
+              settled.current = false;
+              return;
+            }
+            onRename(e.currentTarget.value);
+          }}
+          onKeyDown={(e) => {
+            // Keep app chords (they bubble to the window) off the edit session.
+            e.stopPropagation();
+            if (e.key === "Enter") {
+              settled.current = true;
+              onRename(e.currentTarget.value);
+            } else if (e.key === "Escape") {
+              settled.current = true;
+              onRenameCancel();
+            }
+          }}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            className="flex min-w-0 items-center gap-2"
+            onClick={onSelect}
+            onDoubleClick={onRenameStart}
+            title={tab.detail ? `${state.label} — ${tab.detail}` : state.label}
+          >
+            {busy ? (
+              <Spinner label={null} size={10} />
+            ) : (
+              <span
+                aria-hidden="true"
+                className={`size-1.5 shrink-0 rounded-full ${state.dot}`}
+              />
+            )}
+            <span className="max-w-40 truncate">{tab.title}</span>
+          </button>
+          <button
+            type="button"
+            aria-label={`Close ${tab.title}`}
+            className="shrink-0 rounded px-1 text-[var(--lilt-text-subtle)] opacity-0 transition-opacity hover:text-[var(--lilt-danger)] group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -78,10 +122,18 @@ export function SessionTabs({
   onClose,
   onNewLocalShell,
   onConnectHost,
+  renaming,
+  onRename,
+  onRenameStart,
+  onRenameCancel,
 }: {
   onClose: (id: string) => void;
   onNewLocalShell: () => void;
   onConnectHost: () => void;
+  renaming: string | null;
+  onRename: (id: string, title: string) => void;
+  onRenameStart: (id: string) => void;
+  onRenameCancel: () => void;
 }) {
   const order = useSessions((s) => s.order);
   const byId = useSessions((s) => s.byId);
@@ -98,8 +150,12 @@ export function SessionTabs({
             key={id}
             tab={tab}
             active={id === activeId}
+            renaming={id === renaming}
             onSelect={() => setActive(id)}
             onClose={() => onClose(id)}
+            onRename={(title) => onRename(id, title)}
+            onRenameStart={() => onRenameStart(id)}
+            onRenameCancel={onRenameCancel}
           />
         );
       })}

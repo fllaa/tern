@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { neighbourOf, useSessions } from "./sessions";
+import { neighbourOf, relativeTab, tabAtIndex, useSessions } from "./sessions";
 
 function reset() {
   useSessions.setState({ order: [], byId: {}, activeId: null });
@@ -23,6 +23,35 @@ describe("neighbourOf", () => {
 
   it("returns null for a tab that is not there", () => {
     expect(neighbourOf(["a", "b"], "zz")).toBeNull();
+  });
+});
+
+describe("relativeTab", () => {
+  it("steps forward and back in display order", () => {
+    expect(relativeTab(["a", "b", "c"], "b", 1)).toBe("c");
+    expect(relativeTab(["a", "b", "c"], "b", -1)).toBe("a");
+  });
+
+  it("wraps around at both ends", () => {
+    expect(relativeTab(["a", "b", "c"], "c", 1)).toBe("a");
+    expect(relativeTab(["a", "b", "c"], "a", -1)).toBe("c");
+  });
+
+  it("returns null with no tabs, and starts from the first when none active", () => {
+    expect(relativeTab([], null, 1)).toBeNull();
+    expect(relativeTab(["a", "b"], null, 1)).toBe("a");
+  });
+});
+
+describe("tabAtIndex", () => {
+  it("maps a 1-based position to a tab", () => {
+    expect(tabAtIndex(["a", "b", "c"], 1)).toBe("a");
+    expect(tabAtIndex(["a", "b", "c"], 3)).toBe("c");
+  });
+
+  it("returns null out of range", () => {
+    expect(tabAtIndex(["a", "b"], 5)).toBeNull();
+    expect(tabAtIndex([], 1)).toBeNull();
   });
 });
 
