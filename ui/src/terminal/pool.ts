@@ -118,8 +118,14 @@ export function acquire(id: TabId, opts = currentOptions): TerminalHandle {
   term.loadAddon(search);
 
   const host = document.createElement("div");
-  host.style.width = "100%";
-  host.style.height = "100%";
+  // Absolutely positioned so every tab's terminal overlaps in the same box
+  // instead of stacking down the page. `visibility: hidden` (below) keeps
+  // inactive tabs laid out so FitAddon still measures them — but a laid-out,
+  // full-height element in normal flow *also* claims a screenful of height, so
+  // N tabs would make the pane N screens tall and scrollable. `inset: 0` against
+  // the relative mount removes them from flow while preserving their size.
+  host.style.position = "absolute";
+  host.style.inset = "0";
   // Off-screen until mounted, so opening a background tab never flashes.
   host.style.visibility = "hidden";
 

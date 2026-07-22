@@ -62,5 +62,8 @@ export function TerminalMount() {
     return () => observer.disconnect();
   }, []);
 
-  return <div className="relative h-full w-full" ref={stack} />;
+  // `overflow-hidden`: the terminal pane must never page-scroll — xterm scrolls
+  // its own scrollback internally, and the pooled hosts are absolutely
+  // positioned to fill this box exactly, so any overflow here would be a bug.
+  return <div className="relative h-full w-full overflow-hidden" ref={stack} />;
 }
