@@ -172,10 +172,12 @@ fn whole_file_encryption_hides_details_until_unlocked() {
 /// A real capability boundary, pinned so it is a known limit rather than a
 /// mystery bug report.
 ///
-/// `ssh-keygen -m PKCS8 -N …` writes PBES2/PBKDF2 with no explicit PRF OID,
-/// which means the default: HMAC-SHA1. `ssh-key` reaches PBKDF2-SHA1 only via
-/// the `pkcs5/sha1-insecure` feature, which it does not enable — so these keys
-/// cannot be decrypted here by design, not by oversight.
+/// `id_rsa_pkcs8_enc` is PKCS#8 encrypted with PBES2/PBKDF2-HMAC-SHA1, written
+/// with an explicit PRF by the fixture script (see the note there: ssh-keygen's
+/// `-m PKCS8` default PRF varies by the platform openssl, so it is not relied
+/// on). `ssh-key` reaches PBKDF2-SHA1 only via the `pkcs5/sha1-insecure`
+/// feature, which it does not enable — so this key cannot be decrypted here by
+/// design, not by oversight.
 ///
 /// What matters for the UI is that the error names the *format* as the problem.
 /// Blaming the passphrase would send the user round a loop retyping a

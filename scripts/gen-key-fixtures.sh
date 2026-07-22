@@ -38,15 +38,26 @@ gen id_rsa_pem      rsa     ""       -b 2048 -m PEM
 gen id_rsa_pem_enc  rsa     "$PASS"  -b 2048 -m PEM
 
 # PKCS#8 ("BEGIN PRIVATE KEY" / "BEGIN ENCRYPTED PRIVATE KEY").
-gen id_rsa_pkcs8     rsa    ""       -b 2048 -m PKCS8
-gen id_rsa_pkcs8_enc rsa    "$PASS"  -b 2048 -m PKCS8
+gen id_rsa_pkcs8 rsa "" -b 2048 -m PKCS8
 
-# ssh-keygen's encrypted PKCS#8 omits the PBES2 PRF OID, which means the
-# default: HMAC-SHA1. ssh-key reaches PBKDF2-SHA1 only through
-# `pkcs5/sha1-insecure`, which it does not enable, so that fixture is
-# permanently undecryptable here — tests pin it as a known limit. This second
-# one re-encrypts the same key with an explicit HMAC-SHA256 PRF, which is the
-# encrypted-PKCS#8 shape that does work.
+# Both encrypted PKCS#8 fixtures are written with openssl and an *explicit* PBES2
+# PRF — never `ssh-keygen -m PKCS8 -N …`, whose PRF default is platform-dependent:
+# HMAC-SHA1 on LibreSSL / older OpenSSL, HMAC-SHA256 on OpenSSL 3. Relying on that
+# default made id_rsa_pkcs8_enc actually SHA-256 on Ubuntu CI, so ssh-key
+# decrypted it and the "unsupported format" test failed there while passing on
+# macOS.
+#
+# HMAC-SHA1: ssh-key reaches PBKDF2-SHA1 only through `pkcs5/sha1-insecure`, which
+# it does not enable, so this fixture is permanently undecryptable here — the
+# tests pin it as a known capability limit. (openssl omits the PRF OID for SHA-1
+# since it is the RFC 8018 default; the result is a genuine SHA-1 key on every
+# platform.)
+openssl pkcs8 -topk8 -in "$KEYS_DIR/id_rsa_pkcs8" \
+  -out "$KEYS_DIR/id_rsa_pkcs8_enc" \
+  -passout "pass:$PASS" -v2 aes-256-cbc -v2prf hmacWithSHA1
+cp "$KEYS_DIR/id_rsa_pkcs8.pub" "$KEYS_DIR/id_rsa_pkcs8_enc.pub"
+
+# HMAC-SHA256: the encrypted-PKCS#8 shape ssh-key does decrypt.
 openssl pkcs8 -topk8 -in "$KEYS_DIR/id_rsa_pkcs8" \
   -out "$KEYS_DIR/id_rsa_pkcs8_sha256_enc" \
   -passout "pass:$PASS" -v2 aes-256-cbc -v2prf hmacWithSHA256
