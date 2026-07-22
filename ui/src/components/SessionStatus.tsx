@@ -1,6 +1,6 @@
 // Connection-state surface: a footer pill and a terminal overlay.
 //
-// Both read the tab's `conn` state and, while reconnecting, its `reconnect`
+// Both read the pane's `conn` state and, while reconnecting, its `reconnect`
 // progress. The overlay exists so a dropped session shows *something* — a
 // frozen black terminal with no explanation is the worst version of "survive
 // the day".
@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 
-import type { ConnState, Tab } from "../store/sessions";
+import type { ConnState, Pane } from "../store/sessions";
 
 /** A short label and a colour token for each connection state. */
 function describe(conn: ConnState): { label: string; color: string } {
@@ -46,8 +46,8 @@ function useCountdown(dueAt: number | undefined): number | null {
 }
 
 /** "attempt 2/10, retrying in 3s" — the max is dropped when unlimited (0). */
-function reconnectText(tab: Tab, secondsLeft: number | null): string {
-  const r = tab.reconnect;
+function reconnectText(pane: Pane, secondsLeft: number | null): string {
+  const r = pane.reconnect;
   if (!r) return "";
   const of = r.max > 0 ? `/${r.max}` : "";
   const when =
@@ -56,13 +56,13 @@ function reconnectText(tab: Tab, secondsLeft: number | null): string {
 }
 
 /** Compact status pill for the footer. */
-export function StatusPill({ tab }: { tab: Tab }) {
-  const { label, color } = describe(tab.conn);
-  const secondsLeft = useCountdown(tab.reconnect?.dueAt);
+export function StatusPill({ pane }: { pane: Pane }) {
+  const { label, color } = describe(pane.conn);
+  const secondsLeft = useCountdown(pane.reconnect?.dueAt);
   const detail =
-    tab.conn === "reconnecting"
-      ? reconnectText(tab, secondsLeft)
-      : (tab.detail ?? (tab.exitCode != null ? `exit ${tab.exitCode}` : ""));
+    pane.conn === "reconnecting"
+      ? reconnectText(pane, secondsLeft)
+      : (pane.detail ?? (pane.exitCode != null ? `exit ${pane.exitCode}` : ""));
 
   return (
     <span className="flex items-center gap-1.5">
@@ -70,7 +70,7 @@ export function StatusPill({ tab }: { tab: Tab }) {
         className="inline-block h-2 w-2 shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />
-      <span>{tab.title}</span>
+      <span>{pane.title}</span>
       <span style={{ color }}>· {label}</span>
       {detail && <span className="text-[var(--lilt-text-subtle)]">— {detail}</span>}
     </span>
@@ -81,33 +81,33 @@ export function StatusPill({ tab }: { tab: Tab }) {
  * Overlay shown over the terminal while a session is down.
  *
  * Only for `reconnecting` and `disconnected` — a connected or connecting
- * session shows nothing. `onReconnect` re-drives the same tab; it is offered
+ * session shows nothing. `onReconnect` re-drives the same pane; it is offered
  * only once the supervisor has given up, since during `reconnecting` the retry
  * is already in flight.
  */
 export function SessionOverlay({
-  tab,
+  pane,
   onReconnect,
 }: {
-  tab: Tab;
+  pane: Pane;
   onReconnect: () => void;
 }) {
-  const secondsLeft = useCountdown(tab.reconnect?.dueAt);
-  if (tab.conn !== "reconnecting" && tab.conn !== "disconnected") return null;
+  const secondsLeft = useCountdown(pane.reconnect?.dueAt);
+  if (pane.conn !== "reconnecting" && pane.conn !== "disconnected") return null;
 
   return (
     <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 border-b border-[var(--lilt-border)] bg-[var(--lilt-surface-2)] px-4 py-2 text-xs">
-      {tab.conn === "reconnecting" ? (
+      {pane.conn === "reconnecting" ? (
         <>
           <Spinner size={14} />
           <span className="text-[var(--lilt-text)]">
-            Connection lost — {reconnectText(tab, secondsLeft)}
+            Connection lost — {reconnectText(pane, secondsLeft)}
           </span>
         </>
       ) : (
         <>
           <span className="text-[var(--lilt-danger-text)]">
-            Disconnected{tab.detail ? ` — ${tab.detail}` : ""}
+            Disconnected{pane.detail ? ` — ${pane.detail}` : ""}
           </span>
           <Button size="sm" variant="secondary" className="ml-auto" onClick={onReconnect}>
             Reconnect

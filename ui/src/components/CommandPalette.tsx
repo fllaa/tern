@@ -21,7 +21,7 @@ import { paletteCommands } from "../commands/registry";
 import type { Command as Cmd, CommandContext, CommandGroupId } from "../commands/types";
 import type { Host } from "../lib/hosts-ipc";
 import { accelLabel } from "../lib/shortcuts";
-import { type Tab, useSessions } from "../store/sessions";
+import { useSessions } from "../store/sessions";
 
 const GROUP_LABELS: Record<CommandGroupId, string> = {
   session: "Session",
@@ -56,21 +56,28 @@ export function CommandPalette({
   ctx: CommandContext;
 }) {
   const order = useSessions((s) => s.order);
-  const byId = useSessions((s) => s.byId);
+  const tabs = useSessions((s) => s.tabs);
+  const panes = useSessions((s) => s.panes);
 
   const groups = useMemo<PaletteGroup[]>(() => {
-    const tabs = order.map((id) => byId[id]).filter((t): t is Tab => Boolean(t));
-    const all = paletteCommands(hosts, tabs);
+    // A tab's label is its focused pane's title.
+    const tabLabels = order
+      .map((id) => tabs[id])
+      .filter(Boolean)
+      .map((t) => ({ id: t.id, title: panes[t.activePaneId]?.title ?? "" }));
+    const all = paletteCommands(hosts, tabLabels);
     return GROUP_ORDER.map((id) => ({
       id,
       label: GROUP_LABELS[id],
       items: all.filter((c) => c.group === id),
     })).filter((group) => group.items.length > 0);
-  }, [hosts, order, byId]);
+  }, [hosts, order, tabs, panes]);
 
   const run = (cmd: Cmd) => {
-    onOpenChange(false);
+    // Run before closing: split-fill commands read splitDirRef synchronously,
+    // and closing the palette clears it.
     cmd.run(ctx);
+    onOpenChange(false);
   };
 
   return (

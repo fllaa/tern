@@ -30,7 +30,7 @@ import {
 import { HostNewDialog } from "./components/HostNewDialog";
 import { HostSidebar } from "./components/HostSidebar";
 import { PasteWarningDialog } from "./components/PasteWarningDialog";
-import { SessionOverlay, StatusPill } from "./components/SessionStatus";
+import { StatusPill } from "./components/SessionStatus";
 import { SessionTabs } from "./components/SessionTabs";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { TerminalMount } from "./components/TerminalMount";
@@ -58,6 +58,7 @@ import {
 import type { HostKeyPrompt, SessionEvent } from "./lib/ipc";
 import { eventAccel } from "./lib/shortcuts";
 import * as controller from "./session/controller";
+import { collectPaneIds, neighbourPane, type SplitDir } from "./store/layout";
 import { relativeTab, tabAtIndex, useSessions } from "./store/sessions";
 import { assessPaste } from "./terminal/clipboard";
 import * as pool from "./terminal/pool";
@@ -87,12 +88,13 @@ export default function App() {
   const [pastePending, setPastePending] = useState<{
     text: string;
     lineCount: number;
-    tabId: string;
+    paneId: string;
   } | null>(null);
 
   const order = useSessions((s) => s.order);
   const activeId = useSessions((s) => s.activeId);
-  const byId = useSessions((s) => s.byId);
+  const tabs = useSessions((s) => s.tabs);
+  const panes = useSessions((s) => s.panes);
   const openTab = useSessions((s) => s.openTab);
   const closeTab = useSessions((s) => s.closeTab);
 
@@ -102,6 +104,10 @@ export default function App() {
   // The command context, mirrored so the window keydown handler always
   // dispatches against the latest closures without re-subscribing.
   const cmdCtxRef = useRef<CommandContext | null>(null);
+  // When set, the next spawned session splits the active pane in this direction
+  // rather than opening a new tab. Armed by a split command, consumed by the
+  // next spawn, cleared when the palette closes.
+  const splitDirRef = useRef<SplitDir | null>(null);
 
   const refresh = useCallback(async (q: string) => {
     try {
@@ -168,7 +174,7 @@ export default function App() {
   }, []);
 
   /** Copy-on-select, and route multi-line pastes through a confirmation. */
-  const wireClipboard = useCallback((tabId: string, handle: pool.TerminalHandle) => {
+  const wireClipboard = useCallback((paneId: string, handle: pool.TerminalHandle) => {
     const { term } = handle;
 
     const selection = term.onSelectionChange(() => {
@@ -197,9 +203,9 @@ export default function App() {
             if (!text) return;
             const { needsConfirmation, lineCount } = assessPaste(text);
             if (needsConfirmation) {
-              setPastePending({ text, lineCount, tabId });
+              setPastePending({ text, lineCount, paneId });
             } else {
-              controller.write(tabId, text);
+              controller.write(paneId, text);
             }
           })
           .catch(() => {});
@@ -212,12 +218,13 @@ export default function App() {
   }, []);
 
   // The connect call, shared by opening a host and reconnecting an existing
-  // tab. Reconnecting reuses the tab's terminal (and its already-wired data and
-  // resize handlers), so this must not touch the pool — only re-bind a session.
+  // pane. Reconnecting reuses the pane's terminal (and its already-wired data
+  // and resize handlers), so this must not touch the pool — only re-bind a
+  // session.
   const runConnect = useCallback(
-    (tabId: string, hostId: number) =>
+    (paneId: string, hostId: number) =>
       controller.connect({
-        tabId,
+        paneId,
         hostId,
         onHostKey: (ev) =>
           new Promise<boolean>((resolve) => {
@@ -239,63 +246,117 @@ export default function App() {
     [],
   );
 
-  const openHost = useCallback(
-    async (hostId: number) => {
-      const host = hosts.find((h) => h.id === hostId);
-      if (!host) return;
+  // Route a pane's keystrokes: to itself, or — when its tab is broadcasting —
+  // to every pane in the tab. Fan-out is a plain loop; the backend's per-session
+  // writers already tolerate concurrent writes.
+  const writeData = useCallback((paneId: string, tabId: string, data: string) => {
+    const tab = useSessions.getState().tabs[tabId];
+    if (tab?.broadcast) {
+      for (const pid of collectPaneIds(tab.root)) controller.write(pid, data);
+    } else {
+      controller.write(paneId, data);
+    }
+  }, []);
+
+  // Create a pane, wire its terminal I/O, and connect it. The pane is a new tab,
+  // or — when a split is armed (see `splitDirRef`) — a split of the active pane.
+  const spawn = useCallback(
+    async (init: { hostId: number | null; title: string }) => {
+      // Consume the split direction synchronously, before any await, so a
+      // concurrent palette close cannot clear it out from under us.
+      const dir = splitDirRef.current;
+      splitDirRef.current = null;
 
       // Font before terminal: xterm's WebGL renderer caches a glyph atlas from
-      // whatever font is loaded when the Terminal is constructed, and a
-      // fallback measured there stays wrong for the session's whole life.
+      // whatever font is loaded when the Terminal is constructed, and a fallback
+      // measured there stays wrong for the session's whole life.
       await pool.waitForTerminalFont();
 
-      const tabId = openTab({ hostId, title: host.name });
-      const handle = pool.acquire(tabId);
-      handle.term.onData((data) => controller.write(tabId, data));
-      handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
-      wireClipboard(tabId, handle);
+      const st = useSessions.getState();
+      let tabId: string;
+      let paneId: string;
+      if (dir && st.activeId && st.tabs[st.activeId]) {
+        const tab = st.tabs[st.activeId];
+        const created = st.splitPane(tab.id, tab.activePaneId, dir, init);
+        if (!created) return;
+        tabId = tab.id;
+        paneId = created;
+      } else {
+        const opened = openTab(init);
+        tabId = opened.tabId;
+        paneId = opened.paneId;
+      }
 
-      await runConnect(tabId, hostId);
-      void refresh(query);
+      const handle = pool.acquire(paneId);
+      handle.term.onData((data) => writeData(paneId, tabId, data));
+      handle.term.onResize(({ cols, rows }) => controller.resize(paneId, cols, rows));
+      wireClipboard(paneId, handle);
+
+      if (init.hostId != null) {
+        await runConnect(paneId, init.hostId);
+        void refresh(query);
+      } else {
+        await controller.connectLocal({
+          paneId,
+          onEvent: (ev) => {
+            if (ev.event === "warning") setNotice(ev.message);
+          },
+        });
+      }
     },
-    [hosts, openTab, query, refresh, wireClipboard, runConnect],
+    [openTab, wireClipboard, runConnect, writeData, query, refresh],
   );
 
-  // A local shell tab: identical terminal wiring to a host, but the session is
-  // a local PTY (the platform's default login shell) with no host and no
-  // host-key prompt. There is no `runConnect` here because there is nothing to
-  // trust on first contact.
-  const openLocalShell = useCallback(async () => {
-    await pool.waitForTerminalFont();
+  const openHost = useCallback(
+    (hostId: number) => {
+      const host = hosts.find((h) => h.id === hostId);
+      if (host) void spawn({ hostId, title: host.name });
+    },
+    [hosts, spawn],
+  );
 
-    const tabId = openTab({ hostId: null, title: "Local shell" });
-    const handle = pool.acquire(tabId);
-    handle.term.onData((data) => controller.write(tabId, data));
-    handle.term.onResize(({ cols, rows }) => controller.resize(tabId, cols, rows));
-    wireClipboard(tabId, handle);
+  const openLocalShell = useCallback(() => {
+    void spawn({ hostId: null, title: "Local shell" });
+  }, [spawn]);
 
-    await controller.connectLocal({
-      tabId,
-      onEvent: (ev) => {
-        if (ev.event === "warning") setNotice(ev.message);
-      },
-    });
-  }, [openTab, wireClipboard]);
+  // Duplicate the focused pane's target — its host, or a local shell.
+  const duplicateActivePane = useCallback(() => {
+    const st = useSessions.getState();
+    const tab = st.activeId ? st.tabs[st.activeId] : null;
+    const pane = tab ? st.panes[tab.activePaneId] : null;
+    if (!pane) return;
+    void spawn(
+      pane.hostId != null
+        ? { hostId: pane.hostId, title: pane.title }
+        : { hostId: null, title: "Local shell" },
+    );
+  }, [spawn]);
 
-  // Manual reconnect for a tab the supervisor gave up on. The terminal and its
-  // handlers are still in the pool (the tab never closed), so this only needs
-  // to bind a fresh session to it.
-  const reconnectTab = useCallback(
-    (tabId: string) => {
-      const tab = useSessions.getState().byId[tabId];
-      if (tab?.hostId != null) void runConnect(tabId, tab.hostId);
+  // Reconnect (host) or restart (local shell) a dropped pane. Its terminal and
+  // handlers survive in the pool, so this only re-binds a session.
+  const reconnectPane = useCallback(
+    (paneId: string) => {
+      const pane = useSessions.getState().panes[paneId];
+      if (!pane) return;
+      if (pane.hostId != null) {
+        void runConnect(paneId, pane.hostId);
+      } else {
+        void controller.connectLocal({
+          paneId,
+          onEvent: (ev) => {
+            if (ev.event === "warning") setNotice(ev.message);
+          },
+        });
+      }
     },
     [runConnect],
   );
 
+  // The tab-strip × closes a whole tab: tear down every pane it holds.
   const onCloseTab = useCallback(
     (id: string) => {
-      void controller.destroy(id);
+      const tab = useSessions.getState().tabs[id];
+      if (tab) for (const pid of collectPaneIds(tab.root)) void controller.destroy(pid);
       closeTab(id);
     },
     [closeTab],
@@ -362,7 +423,9 @@ export default function App() {
   // store — that object mutates on every frame and would re-render at 100 Hz.
   useEffect(() => {
     const timer = setInterval(() => {
-      const id = useSessions.getState().activeId;
+      const st = useSessions.getState();
+      const tab = st.activeId ? st.tabs[st.activeId] : null;
+      const id = tab?.activePaneId ?? null;
       const flow = id ? controller.flowOf(id) : null;
       if (!flow) {
         setFlowLine("");
@@ -385,20 +448,30 @@ export default function App() {
   // and keymap stay pure. Rebuilt each render and mirrored into the ref the
   // window keydown handler reads, so dispatch always sees the latest closures.
   const cmdCtx: CommandContext = {
-    openHost: (id) => void openHost(id),
-    openLocalShell: () => void openLocalShell(),
-    connectHostPrompt: () => setPalette(true),
+    openHost,
+    openLocalShell,
+    duplicateActivePane,
+    connectHostPrompt: () => {
+      splitDirRef.current = null;
+      setPalette(true);
+    },
     focusSearch: () => {
       if (useSessions.getState().activeId) setSearching(true);
     },
-    togglePalette: () => setPalette((open) => !open),
-    closeActiveTab: () => {
-      const id = useSessions.getState().activeId;
-      if (id) onCloseTab(id);
+    togglePalette: () => {
+      splitDirRef.current = null;
+      setPalette((open) => !open);
+    },
+    closeActivePane: () => {
+      const st = useSessions.getState();
+      const tab = st.activeId ? st.tabs[st.activeId] : null;
+      if (!tab) return;
+      void controller.destroy(tab.activePaneId);
+      st.closePane(tab.id, tab.activePaneId);
     },
     selectRelativeTab: (delta) => {
-      const { order: tabs, activeId: current } = useSessions.getState();
-      const next = relativeTab(tabs, current, delta);
+      const { order: ids, activeId: current } = useSessions.getState();
+      const next = relativeTab(ids, current, delta);
       if (next) useSessions.getState().setActive(next);
     },
     selectTabByIndex: (oneBased) => {
@@ -410,10 +483,27 @@ export default function App() {
       const id = useSessions.getState().activeId;
       if (id) setRenaming(id);
     },
+    splitActive: (dir) => {
+      if (useSessions.getState().activeId == null) return;
+      splitDirRef.current = dir;
+      setPalette(true);
+    },
+    focusNextPane: () => {
+      const st = useSessions.getState();
+      const tab = st.activeId ? st.tabs[st.activeId] : null;
+      if (!tab) return;
+      const next = neighbourPane(tab.root, tab.activePaneId);
+      if (next) st.setActivePane(tab.id, next);
+    },
+    toggleBroadcast: () => {
+      const id = useSessions.getState().activeId;
+      if (id) useSessions.getState().toggleBroadcast(id);
+    },
   };
   cmdCtxRef.current = cmdCtx;
 
-  const activeTab = activeId ? byId[activeId] : null;
+  const activeTab = activeId ? tabs[activeId] : null;
+  const activePane = activeTab ? (panes[activeTab.activePaneId] ?? null) : null;
 
   return (
     <div className="h-full bg-[var(--lilt-canvas)] font-sans text-[var(--lilt-text)]">
@@ -514,7 +604,11 @@ export default function App() {
                 renaming={renaming}
                 onRename={(id, title) => {
                   const next = title.trim();
-                  if (next) useSessions.getState().renameTab(id, next);
+                  if (next) {
+                    const st = useSessions.getState();
+                    const tab = st.tabs[id];
+                    if (tab) st.renamePane(tab.activePaneId, next);
+                  }
                   setRenaming(null);
                 }}
                 onRenameStart={setRenaming}
@@ -528,36 +622,31 @@ export default function App() {
                   <p className="text-sm text-[var(--lilt-text-subtle)]">
                     Select a host to open a session.
                   </p>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void openLocalShell()}
-                  >
+                  <Button size="sm" variant="secondary" onClick={openLocalShell}>
                     New local shell
                   </Button>
                 </div>
               ) : (
                 <>
-                  {activeTab && (
-                    <SessionOverlay
-                      tab={activeTab}
-                      onReconnect={() => reconnectTab(activeTab.id)}
-                    />
+                  {activeTab?.broadcast && (
+                    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-[var(--lilt-warning-soft,var(--lilt-surface-2))] px-3 py-1 text-xs font-medium text-[var(--lilt-warning-text,var(--lilt-text))]">
+                      ⇉ Broadcasting input to every pane in this tab
+                    </div>
                   )}
-                  {activeTab && searching && (
+                  {activePane && searching && (
                     <TerminalSearch
-                      key={activeTab.id}
-                      tabId={activeTab.id}
+                      key={activePane.id}
+                      paneId={activePane.id}
                       onClose={() => setSearching(false)}
                     />
                   )}
-                  <TerminalMount />
+                  <TerminalMount onReconnectPane={reconnectPane} />
                 </>
               )}
             </main>
 
             <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-[var(--lilt-border)] px-3 text-[11px] text-[var(--lilt-text-subtle)]">
-              {activeTab && <StatusPill tab={activeTab} />}
+              {activePane && <StatusPill pane={activePane} />}
               <span className="ml-auto font-mono">{flowLine}</span>
             </footer>
             {notice && (
@@ -603,7 +692,10 @@ export default function App() {
       )}
       <CommandPalette
         open={palette}
-        onOpenChange={setPalette}
+        onOpenChange={(open) => {
+          setPalette(open);
+          if (!open) splitDirRef.current = null;
+        }}
         hosts={hosts}
         ctx={cmdCtx}
       />
@@ -628,7 +720,7 @@ export default function App() {
           lineCount={pastePending.lineCount}
           onCancel={() => setPastePending(null)}
           onConfirm={() => {
-            controller.write(pastePending.tabId, pastePending.text);
+            controller.write(pastePending.paneId, pastePending.text);
             setPastePending(null);
           }}
         />

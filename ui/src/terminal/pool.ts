@@ -37,7 +37,7 @@ import type { ISearchOptions } from "@xterm/addon-search";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 
-import type { TabId } from "../store/sessions";
+import type { PaneId } from "../store/sessions";
 import { searchDecorations, terminalTheme } from "./theme";
 
 export interface TerminalHandle {
@@ -53,7 +53,7 @@ export interface TerminalHandle {
   disposers: Array<() => void>;
 }
 
-const pool = new Map<TabId, TerminalHandle>();
+const pool = new Map<PaneId, TerminalHandle>();
 
 export interface TerminalOptions {
   fontFamily: string;
@@ -100,7 +100,7 @@ export async function waitForTerminalFont(opts = currentOptions): Promise<void> 
 }
 
 /** Create (or return) the terminal for a tab. */
-export function acquire(id: TabId, opts = currentOptions): TerminalHandle {
+export function acquire(id: PaneId, opts = currentOptions): TerminalHandle {
   const existing = pool.get(id);
   if (existing) return existing;
 
@@ -118,16 +118,13 @@ export function acquire(id: TabId, opts = currentOptions): TerminalHandle {
   term.loadAddon(search);
 
   const host = document.createElement("div");
-  // Absolutely positioned so every tab's terminal overlaps in the same box
-  // instead of stacking down the page. `visibility: hidden` (below) keeps
-  // inactive tabs laid out so FitAddon still measures them — but a laid-out,
-  // full-height element in normal flow *also* claims a screenful of height, so
-  // N tabs would make the pane N screens tall and scrollable. `inset: 0` against
-  // the relative mount removes them from flow while preserving their size.
+  // Absolutely positioned to fill its leaf container exactly (inset:0 against a
+  // relative mount), so panes overlap in the same box instead of stacking down
+  // the page and each claiming a screenful of height. Visibility is the tab
+  // *layer*'s job now: a background tab is visibility:hidden (still laid out, so
+  // FitAddon measures correctly), which hides its panes; the host stays visible.
   host.style.position = "absolute";
   host.style.inset = "0";
-  // Off-screen until mounted, so opening a background tab never flashes.
-  host.style.visibility = "hidden";
 
   const handle: TerminalHandle = {
     term,
@@ -142,7 +139,7 @@ export function acquire(id: TabId, opts = currentOptions): TerminalHandle {
   return handle;
 }
 
-export function get(id: TabId): TerminalHandle | undefined {
+export function get(id: PaneId): TerminalHandle | undefined {
   return pool.get(id);
 }
 
@@ -154,29 +151,44 @@ export function ensureOpen(handle: TerminalHandle): void {
 }
 
 /**
- * Make a tab visible and give it the WebGL context.
+ * The most simultaneously-visible panes that get a WebGL context.
  *
- * Fit happens after the element is visible — a hidden-but-laid-out element has
- * real dimensions, but the caller may also have just resized the container.
+ * Browsers cap WebGL contexts around 8–16; a split tab can show many panes at
+ * once, so the focused pane and up to this many visible neighbours get WebGL
+ * and the rest fall back to the DOM renderer. A single-pane tab always fits.
  */
-export function activate(handle: TerminalHandle): void {
-  ensureOpen(handle);
-  handle.host.style.visibility = "visible";
+export const MAX_WEBGL = 8;
 
-  if (!handle.webgl) {
-    void loadWebgl(handle);
+/**
+ * Reconcile which terminals hold a WebGL context.
+ *
+ * `visible` is the active tab's panes, focused first — so the focused pane is
+ * always within the cap. Panes past the cap, and every pane in a background
+ * tab, drop to the DOM renderer (its documented fallback). Visibility itself is
+ * the React tab-layer's job; this only rations the scarce GL contexts.
+ */
+export function reconcileRenderers(visible: PaneId[]): void {
+  const withGl = new Set(visible.slice(0, MAX_WEBGL));
+  for (const [id, handle] of pool) {
+    if (withGl.has(id)) {
+      ensureWebgl(handle);
+      safeFit(handle);
+    } else {
+      dropWebgl(handle);
+    }
   }
-  safeFit(handle);
 }
 
-/** Hide a tab and release its WebGL context for whichever tab comes next. */
-export function deactivate(handle: TerminalHandle): void {
-  // Dispose *before* hiding: a WebGL renderer attached to an element that just
-  // became invisible is where crashes live.
+function ensureWebgl(handle: TerminalHandle): void {
+  if (!handle.webgl) void loadWebgl(handle);
+}
+
+/** Release a terminal's WebGL context, falling back to the DOM renderer. Dispose
+ *  before it can be hidden — a live context on an invisible element is a crash. */
+function dropWebgl(handle: TerminalHandle): void {
   handle.webgl?.dispose();
   handle.webgl = null;
   handle.renderer = "dom";
-  handle.host.style.visibility = "hidden";
 }
 
 async function loadWebgl(handle: TerminalHandle): Promise<void> {
@@ -247,7 +259,7 @@ function withDecorations(opts?: Partial<ISearchOptions>): ISearchOptions {
 
 /** Find the next match, scrolling it into view. Returns whether one was found. */
 export function searchNext(
-  id: TabId,
+  id: PaneId,
   query: string,
   opts?: Partial<ISearchOptions>,
 ): boolean {
@@ -256,7 +268,7 @@ export function searchNext(
 
 /** Find the previous match. */
 export function searchPrev(
-  id: TabId,
+  id: PaneId,
   query: string,
   opts?: Partial<ISearchOptions>,
 ): boolean {
@@ -264,12 +276,12 @@ export function searchPrev(
 }
 
 /** Drop all match highlighting — for closing the search bar. */
-export function searchClear(id: TabId): void {
+export function searchClear(id: PaneId): void {
   pool.get(id)?.search.clearDecorations();
 }
 
 /** Subscribe to result-count changes; returns an unsubscribe. */
-export function onSearchResults(id: TabId, cb: (r: SearchResults) => void): () => void {
+export function onSearchResults(id: PaneId, cb: (r: SearchResults) => void): () => void {
   const handle = pool.get(id);
   if (!handle) return () => {};
   const sub = handle.search.onDidChangeResults(cb);
@@ -277,7 +289,7 @@ export function onSearchResults(id: TabId, cb: (r: SearchResults) => void): () =
 }
 
 /** Tear a terminal down for good. */
-export function release(id: TabId): void {
+export function release(id: PaneId): void {
   const handle = pool.get(id);
   if (!handle) return;
   for (const dispose of handle.disposers) {

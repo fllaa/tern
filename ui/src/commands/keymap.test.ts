@@ -5,7 +5,7 @@ import { STATIC_COMMANDS } from "./registry";
 import type { CommandContext } from "./types";
 
 function resetStore() {
-  useSessions.setState({ order: [], byId: {}, activeId: null });
+  useSessions.setState({ order: [], tabs: {}, panes: {}, activeId: null });
 }
 
 function noopCtx(): CommandContext {
@@ -15,11 +15,15 @@ function noopCtx(): CommandContext {
     connectHostPrompt: vi.fn(),
     focusSearch: vi.fn(),
     togglePalette: vi.fn(),
-    closeActiveTab: vi.fn(),
+    closeActivePane: vi.fn(),
     selectRelativeTab: vi.fn(),
     selectTabByIndex: vi.fn(),
     selectTab: vi.fn(),
     renameActiveTab: vi.fn(),
+    splitActive: vi.fn(),
+    focusNextPane: vi.fn(),
+    toggleBroadcast: vi.fn(),
+    duplicateActivePane: vi.fn(),
   };
 }
 
@@ -83,7 +87,7 @@ describe("dispatchKey", () => {
     const e = keydown({ metaKey: true, code: "KeyW" });
     expect(dispatchKey(e, ctx)).toBe(true);
     expect(e.preventDefault).toHaveBeenCalled();
-    expect(ctx.closeActiveTab).not.toHaveBeenCalled();
+    expect(ctx.closeActivePane).not.toHaveBeenCalled();
   });
 
   it("resolves the chord from code, not the shifted key glyph", () => {

@@ -5,6 +5,7 @@
 // registry and keymap stay testable without React or the DOM.
 
 import type { Accel } from "../lib/shortcuts";
+import type { SplitDir } from "../store/layout";
 
 export type CommandGroupId = "session" | "tabs" | "hosts" | "view";
 
@@ -16,11 +17,15 @@ export interface CommandContext {
   connectHostPrompt: () => void;
   focusSearch: () => void;
   togglePalette: () => void;
-  closeActiveTab: () => void;
+  closeActivePane: () => void;
   selectRelativeTab: (delta: number) => void;
   selectTabByIndex: (oneBased: number) => void;
   selectTab: (tabId: string) => void;
   renameActiveTab: () => void;
+  splitActive: (dir: SplitDir) => void;
+  focusNextPane: () => void;
+  toggleBroadcast: () => void;
+  duplicateActivePane: () => void;
 }
 
 export interface Command {

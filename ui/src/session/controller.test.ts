@@ -33,7 +33,7 @@ describe("connectLocal", () => {
   it("opens a local_pty session with the default shell and no explicit program", async () => {
     const captured = captureOpenSession();
 
-    await controller.connectLocal({ tabId: "t-local-default" });
+    await controller.connectLocal({ paneId: "p-local-default" });
 
     expect(captured.req?.target).toEqual({ kind: "local_pty", program: null });
   });
@@ -42,7 +42,7 @@ describe("connectLocal", () => {
     const captured = captureOpenSession();
 
     await controller.connectLocal({
-      tabId: "t-local-explicit",
+      paneId: "p-local-explicit",
       program: "/bin/bash",
       args: ["-l"],
     });

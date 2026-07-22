@@ -5,13 +5,19 @@
 // keymap resolves against the static set alone.
 
 import type { Host } from "../lib/hosts-ipc";
-import { type Tab, useSessions } from "../store/sessions";
+import { collectPaneIds } from "../store/layout";
+import { useSessions } from "../store/sessions";
 import { hostCommands } from "./hosts";
-import { tabCommands } from "./tabs";
+import { type TabLabel, tabCommands } from "./tabs";
 import type { Command } from "./types";
 
 const hasActiveTab = () => useSessions.getState().activeId != null;
 const hasMultipleTabs = () => useSessions.getState().order.length > 1;
+const hasMultiplePanes = () => {
+  const s = useSessions.getState();
+  const tab = s.activeId ? s.tabs[s.activeId] : null;
+  return tab != null && collectPaneIds(tab.root).length > 1;
+};
 
 /** Cmd/Ctrl+Shift 1..8 select that tab; 9 selects the last. */
 function selectByIndexCommands(): Command[] {
@@ -71,12 +77,57 @@ export const STATIC_COMMANDS: Command[] = [
     run: (c) => c.connectHostPrompt(),
   },
   {
+    id: "session.duplicatePane",
+    title: "Duplicate active pane",
+    group: "session",
+    keywords: ["duplicate", "clone"],
+    enabled: hasActiveTab,
+    run: (c) => c.duplicateActivePane(),
+  },
+  {
+    id: "pane.splitRight",
+    title: "Split pane right",
+    group: "view",
+    keywords: ["split", "vertical", "side by side"],
+    keybinding: { key: "d" },
+    enabled: hasActiveTab,
+    run: (c) => c.splitActive("row"),
+  },
+  {
+    id: "pane.splitDown",
+    title: "Split pane down",
+    group: "view",
+    keywords: ["split", "horizontal", "stack"],
+    keybinding: { key: "s" },
+    enabled: hasActiveTab,
+    run: (c) => c.splitActive("column"),
+  },
+  {
+    id: "pane.focusNext",
+    title: "Focus next pane",
+    group: "view",
+    keywords: ["pane", "cycle", "other"],
+    keybinding: { key: "o" },
+    enabled: hasMultiplePanes,
+    run: (c) => c.focusNextPane(),
+  },
+  {
+    id: "session.toggleBroadcast",
+    title: "Toggle broadcast to all panes",
+    group: "view",
+    keywords: ["broadcast", "sync", "type everywhere"],
+    keybinding: { key: "b" },
+    enabled: hasMultiplePanes,
+    run: (c) => c.toggleBroadcast(),
+  },
+  {
     id: "tab.close",
-    title: "Close tab",
+    title: "Close pane",
     group: "tabs",
+    keywords: ["close", "pane"],
     keybinding: { key: "w" },
     enabled: hasActiveTab,
-    run: (c) => c.closeActiveTab(),
+    run: (c) => c.closeActivePane(),
   },
   {
     id: "tab.next",
@@ -117,7 +168,7 @@ export function commandById(id: string): Command | undefined {
 
 /** Everything the palette lists: enabled, non-hidden static commands plus the
  *  dynamic host and tab items. */
-export function paletteCommands(hosts: Host[], tabs: Tab[]): Command[] {
+export function paletteCommands(hosts: Host[], tabs: TabLabel[]): Command[] {
   const staticVisible = STATIC_COMMANDS.filter(
     (c) => !c.hidden && (!c.enabled || c.enabled()),
   );

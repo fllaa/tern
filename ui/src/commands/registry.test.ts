@@ -4,7 +4,7 @@ import { useSessions } from "../store/sessions";
 import { commandById, paletteCommands } from "./registry";
 
 function resetStore() {
-  useSessions.setState({ order: [], byId: {}, activeId: null });
+  useSessions.setState({ order: [], tabs: {}, panes: {}, activeId: null });
 }
 
 // Only the fields the host provider reads matter here.
@@ -43,10 +43,10 @@ describe("paletteCommands", () => {
   });
 
   it("adds a switch command per open tab", () => {
-    const id = useSessions.getState().openTab({ hostId: 1, title: "alpha" });
-    const { order, byId } = useSessions.getState();
-    const tabs = order.map((t) => byId[t]);
-    const cmd = paletteCommands([], tabs).find((c) => c.id === `tab.switch:${id}`);
+    const { tabId } = useSessions.getState().openTab({ hostId: 1, title: "alpha" });
+    const cmd = paletteCommands([], [{ id: tabId, title: "alpha" }]).find(
+      (c) => c.id === `tab.switch:${tabId}`,
+    );
     expect(cmd?.title).toBe("alpha");
   });
 });
