@@ -69,7 +69,7 @@ mod imp {
                             eprintln!("could not read password: {e}");
                             std::process::exit(1);
                         });
-                    auth = Some(AuthMethod::Password(pw));
+                    auth = Some(AuthMethod::password(pw));
                 }
                 "--agent" => auth = Some(AuthMethod::Agent),
                 "--key" => {
@@ -88,7 +88,7 @@ mod imp {
             i += 1;
         }
         if let Some(path) = key_path {
-            auth = Some(AuthMethod::KeyFile { path, passphrase });
+            auth = Some(AuthMethod::key_file(path, passphrase));
         }
 
         Args {

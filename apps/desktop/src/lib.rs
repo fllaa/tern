@@ -1,13 +1,69 @@
 //! Tern desktop shell. Deliberately thin: Tauri wiring and capabilities only —
 //! all real logic lives in the `core-*` crates, which never depend on `tauri`.
 
+mod auth;
 mod commands;
+mod reconnect;
+mod session_cfg;
+mod store_commands;
+
+use tauri::Manager as _;
+use tracing_subscriber::EnvFilter;
+
+/// Install the tracing subscriber that turns the `tracing` events scattered
+/// through the connect/auth/session paths into lines in the `bun run tauri dev`
+/// terminal.
+///
+/// Filtering resolves in order: `RUST_LOG`, then `TERN_LOG`, then a built-in
+/// default. The default is build-aware — a debug build (what `tauri dev`
+/// produces) shows Tern's own crates at `debug` while keeping russh and tokio at
+/// `warn`, so a connect trace is legible instead of buried; a release build
+/// stays quiet unless asked. Override either way, e.g.
+/// `RUST_LOG=tern_core_ssh=trace bun run tauri dev`.
+///
+/// `try_init` rather than `init`: it returns instead of panicking if a
+/// subscriber is already installed (a test harness, a second call), which is
+/// never worth aborting startup over. Secrets never reach here — `AuthMethod`'s
+/// `Debug` redacts them at the source (see `core-ssh`'s `config.rs`).
+fn init_tracing() {
+    let default = if cfg!(debug_assertions) {
+        "warn,tern_lib=debug,tern_core_ssh=debug"
+    } else {
+        "warn"
+    };
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_from_env("TERN_LOG"))
+        .unwrap_or_else(|_| EnvFilter::new(default));
+
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+/// Where the store and `known_hosts` live, under the OS app-config directory.
+///
+/// Resolution happens here rather than in `core-store` — that crate takes a
+/// path and discovers nothing, which is what keeps it `tauri`-free and makes
+/// its in-memory constructor a true equivalent for tests.
+fn app_paths(app: &tauri::App) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("could not resolve app config dir: {e}"))?;
+    Ok((dir.join("tern.db"), dir.join("known_hosts")))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     tauri::Builder::default()
-        .manage(commands::AppState::default())
+        .setup(|app| {
+            let (db_path, known_hosts_path) = app_paths(app)?;
+            let store = tern_core_store::Store::open(&db_path)
+                .map_err(|e| format!("could not open store at {}: {e}", db_path.display()))?;
+            app.manage(commands::AppState::new(store, known_hosts_path));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            // session lifecycle
             commands::open_session,
             commands::approve_host_key,
             commands::write_session,
@@ -15,6 +71,39 @@ pub fn run() {
             commands::pause_session,
             commands::resume_session,
             commands::close_session,
+            // hosts
+            store_commands::list_hosts,
+            store_commands::get_host,
+            store_commands::create_host,
+            store_commands::update_host,
+            store_commands::delete_host,
+            store_commands::move_host,
+            store_commands::set_host_tags,
+            // folders
+            store_commands::list_folders,
+            store_commands::create_folder,
+            store_commands::rename_folder,
+            store_commands::move_folder,
+            store_commands::delete_folder,
+            // tags
+            store_commands::list_tags,
+            store_commands::create_tag,
+            store_commands::delete_tag,
+            // known hosts
+            store_commands::list_known_hosts,
+            store_commands::remove_known_host,
+            store_commands::import_known_hosts,
+            // ssh_config import
+            store_commands::scan_ssh_config,
+            store_commands::import_ssh_config,
+            // auth: credential store health, key import
+            store_commands::keyring_status,
+            store_commands::inspect_key,
+            store_commands::verify_key_passphrase,
+            // appearance
+            store_commands::get_appearance,
+            store_commands::set_appearance,
+            // benchmark harness (Phase 0; kept runnable so regressions show)
             commands::bench_reset,
             commands::bench_stats,
             commands::bench_finish,

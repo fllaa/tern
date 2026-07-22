@@ -9,6 +9,14 @@
 
 use serde::{Deserialize, Serialize};
 
+mod store;
+
+pub use store::{
+    AppearanceDto, AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto,
+    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
+    SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
+};
+
 /// Opaque identifier for a terminal session (SSH or local PTY).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub String);
@@ -25,6 +33,16 @@ impl std::fmt::Display for SessionId {
 pub enum Target {
     Ssh(SshTarget),
     LocalPty(LocalPtyTarget),
+    /// A host from the store, connected by id.
+    ///
+    /// This is the path the product UI uses, and it is a security property
+    /// rather than a convenience: for a saved host **no credential ever
+    /// crosses the IPC boundary**. The Rust side reads `secret_ref` and
+    /// resolves the secret from the OS keyring itself. `Ssh` survives only
+    /// for ad-hoc quick-connect, where there is no stored secret to resolve.
+    SavedHost {
+        host_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,13 +103,62 @@ pub struct ResizeReq {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SessionEvent {
+    /// First contact with an unknown host key. The UI prompts; the connect
+    /// blocks until `approve_host_key` answers.
     HostKeyPrompt {
+        /// The session this prompt belongs to, and the id to answer it with.
+        ///
+        /// Carried in the event because it is the only way the UI can learn the
+        /// id in time: `open_session` mints the id but does not return it until
+        /// the connect finishes, and the connect cannot finish until this very
+        /// prompt is answered. Without it the UI would answer with an empty id
+        /// and the connect would hang forever awaiting a decision that can never
+        /// be routed back.
+        session_id: String,
         host: String,
         port: u16,
         algorithm: String,
         fingerprint_sha256: String,
     },
+    /// A recorded key for this host and algorithm does not match what the
+    /// server offered.
+    ///
+    /// Deliberately a separate variant from `HostKeyPrompt`, not a flag on it:
+    /// this path must never render as the same "do you want to continue?"
+    /// dialog. The connect is already refused by the time this arrives —
+    /// recovery is an explicit `remove_known_host` followed by a reconnect,
+    /// which then presents as ordinary first contact.
+    HostKeyChanged {
+        host: String,
+        port: u16,
+        algorithm: String,
+        recorded_fingerprint: String,
+        presented_fingerprint: String,
+        known_hosts_path: String,
+        known_hosts_line: usize,
+    },
+    /// The host key is on file as `@revoked`.
+    HostKeyRevoked {
+        host: String,
+        port: u16,
+        known_hosts_path: String,
+        known_hosts_line: usize,
+    },
     Connected,
+    /// A reconnect attempt is scheduled after a transport drop. Purely
+    /// informational — the session id is unchanged and the terminal keeps its
+    /// scrollback; this drives the "reconnecting…" indicator and the countdown.
+    /// `Connected` follows on success, `Disconnected` when the supervisor gives
+    /// up.
+    Reconnecting {
+        attempt: u32,
+        /// The configured ceiling, or `0` for unlimited — shown as "n/max".
+        max_attempts: u32,
+        /// How long until this attempt fires, so the UI can count down.
+        delay_ms: u64,
+    },
+    /// The transport died. Distinct from `Exited`, which means the remote
+    /// shell ended on its own — only this one should trigger a reconnect.
     Disconnected {
         reason: String,
     },
@@ -99,6 +166,16 @@ pub enum SessionEvent {
         code: Option<u32>,
     },
     Error {
+        message: String,
+    },
+    /// Something the user should know that did not stop the connection.
+    ///
+    /// Separate from `Error`, which is terminal. The case this exists for is a
+    /// host with a saved credential on a machine whose credential store cannot
+    /// be read: the connect still proceeds — an agent or an unencrypted key may
+    /// carry it — but "authentication failed" alone would send the user to
+    /// check a password that was never the problem.
+    Warning {
         message: String,
     },
 }

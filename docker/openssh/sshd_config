@@ -3,7 +3,37 @@ Port 22
 PermitRootLogin no
 PasswordAuthentication yes
 PubkeyAuthentication yes
+
+# Without this the rig stops exercising password auth at all.
+#
+# This image tracks alpine:3.22, which now carries OpenSSH 10.0p2 built without
+# PAM. In that configuration, with keyboard-interactive enabled, sshd serves the
+# password through keyboard-interactive and no longer advertises the standalone
+# `password` method — a probe reports "publickey,keyboard-interactive", and
+# every password test fails with "rejected". Turning it off restores
+# "publickey,password".
+#
+# Tern implements the `password` method; keyboard-interactive is deferred out of
+# Phase 1. The rig has to offer the method under test, or a rebuild silently
+# converts the password tests into tests of nothing.
+KbdInteractiveAuthentication no
 UseDNS no
 AllowTcpForwarding yes
 AcceptEnv TERM
 Subsystem sftp internal-sftp
+
+# OpenSSH 9.8+ penalises a source IP after a failed authentication and then
+# drops its subsequent connections. The suite deliberately authenticates with a
+# wrong password (wrong_password_fails), so with penalties on it poisons itself:
+# every other test connecting from the same IP gets dropped with
+# Protocol(Disconnect). It presents as flakiness that worsens across runs as
+# penalties accumulate, and it scales with parallelism — which is why it only
+# surfaced once the workspace grew enough test binaries to run the rig tests
+# concurrently. Brute-force protection is meaningless on a loopback fixture
+# whose credentials are published in this repo.
+PerSourcePenalties no
+
+# Same reasoning: connection throttling has no purpose here, and the suite
+# opens every session at once.
+MaxStartups 100:30:200
+MaxSessions 100

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "ui/src/**",
+      "ui/e2e/**",
+      "ui/*.ts",
+      "scripts/**/*.mjs",
+      "*.json",
+      "!**/*.css"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 90
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": { "noUnusedImports": "error" },
+      "suspicious": { "noConsole": "error" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["ui/src/components/ui/**", "ui/src/lib/tree.ts"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noStaticElementInteractions": "off",
+            "useKeyWithClickEvents": "off",
+            "useSemanticElements": "off",
+            "noLabelWithoutControl": "off",
+            "noNoninteractiveElementToInteractiveRole": "off"
+          },
+          "complexity": { "noExcessiveCognitiveComplexity": "off" },
+          "correctness": { "useExhaustiveDependencies": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["ui/src/lib/bench.ts", "ui/src/bench/**", "scripts/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+    }
+  ]
+}

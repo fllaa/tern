@@ -23,9 +23,10 @@ These are the decisions that get expensive to change after month two.
 ```
 repo/
 ├─ crates/
-│  ├─ core-ssh/      # russh session mgmt, channels, forwards, agent
+│  ├─ core-ssh/      # russh session mgmt, channels, forwards, agent, known_hosts
+│  ├─ core-store/    # SQLite: hosts, folders, tags, settings (ADR-0012)
 │  ├─ core-sftp/     # russh-sftp wrapper, transfer queue engine
-│  ├─ core-vault/    # storage + crypto (SQLite, argon2id, XChaCha20)
+│  ├─ core-vault/    # secrets: OS keyring, then argon2id/XChaCha20 vault
 │  ├─ core-serial/   # serialport-rs + minimal telnet
 │  └─ proto/         # serde types shared across the IPC boundary
 ├─ apps/desktop/     # Tauri 2 shell (thin: wiring + capabilities)
@@ -90,11 +91,19 @@ Kill the unknowns while the codebase is still 500 lines.
 
 ### Phase 1 — Terminal core (4–6 weeks)
 
-- Host manager: CRUD, folders/tags, search, quick-connect (SQLite).
-- Auth: password, publickey (ed25519/ECDSA/RSA), agent, keyboard-interactive; per-host overrides.
-- **`~/.ssh/config` import** — disproportionate adoption lever, do it early. OpenSSH and PuTTY key import.
-- Terminal UX: tabs, themes, font config, scrollback + search, copy-on-select, paste protection.
+- Host manager: CRUD, folders/tags, search, quick-connect (SQLite, ADR-0012).
+- Auth: password, publickey (ed25519/ECDSA/RSA), agent; per-host overrides.
+- Host-key trust: own known_hosts, TOFU, changed-key refusal (ADR-0013).
+- **`~/.ssh/config` import** (ADR-0015) — disproportionate adoption lever, do it early. OpenSSH and PuTTY key import.
+- Terminal UX: tabs (ADR-0016), themes, font config, scrollback + search, copy-on-select, paste protection.
 - Reconnect logic, keepalive, clear connection-state UI.
+
+**Deferred out of Phase 1:** keyboard-interactive auth (the cost is the async
+prompt round-trip across the IPC boundary, not the protocol) and i18n (a
+per-string tax on every component written this phase). PuTTY `.ppk` import and
+the Windows agent stay in — `ssh-key`'s `ppk` feature and russh's
+`connect_named_pipe`/`connect_pageant` are already compiled into the tree, so
+both are adapter work rather than protocol work.
 
 **Exit criteria:** you dogfood it daily against your own fleet and stop reaching for the old client. Nothing validates a terminal like living in it.
 
@@ -165,7 +174,7 @@ Scope cuts to resist: bookmarks, folder-sync jobs, cloud-storage backends. All p
 
 ## 5. Cross-cutting engineering practice
 
-- **Testing:** unit tests in core crates; integration tests against dockerized **OpenSSH and dropbear** (old and embedded servers are where SSH clients actually break); golden-file tests for the vault format; a manual release checklist for the 3-OS × auth-method grid.
+- **Testing:** unit tests in core crates; integration tests against dockerized **OpenSSH and dropbear** (old and embedded servers are where SSH clients actually break); golden-file tests for the vault format; a headless-Chromium layout smoke test for the UI, because jsdom has no layout engine and cannot see a broken panel (ADR-0017); a manual release checklist for the 3-OS × auth-method grid.
 - **Release rhythm:** tagged beta every 2–3 weeks from Phase 1 onward. Early users will find the Windows and Linux quirks you can't.
 - **Perf budgets:** keep the Phase 0 throughput benchmark runnable in CI so regressions are visible.
 - **Known platform pain:** WebKitGTK on Linux is Tauri's weak spot — rendering performance varies and Wayland has quirks. Test on Ubuntu LTS, Fedora, and Arch early; keep the xterm.js DOM renderer as a fallback (xterm 6 removed the canvas renderer) and document known issues honestly.

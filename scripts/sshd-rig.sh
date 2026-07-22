@@ -15,7 +15,7 @@ case "${1:-}" in
       cp "$RIG_DIR/id_ed25519.pub" "$RIG_DIR/authorized_keys"
     fi
     docker compose -f docker/compose.yml up -d --build
-    for port in 2222 2223; do
+    for port in 2222 2223 2224; do
       ok=""
       for _ in $(seq 1 30); do
         if nc -z 127.0.0.1 "$port" 2>/dev/null; then ok=1; break; fi
@@ -23,7 +23,8 @@ case "${1:-}" in
       done
       [ -n "$ok" ] || { echo "error: port $port did not come up" >&2; exit 1; }
     done
-    echo "rig up: openssh :2222, dropbear :2223 (user tern, key $RIG_DIR/id_ed25519, password tern123)"
+    echo "rig up: openssh :2222, dropbear :2223, openssh-nopassword :2224"
+    echo "        (user tern, key $RIG_DIR/id_ed25519, password tern123)"
     ;;
   down)
     docker compose -f docker/compose.yml down -v

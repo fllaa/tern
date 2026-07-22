@@ -1,9 +1,187 @@
 @import "tailwindcss";
 
+/* Lilt's documented variant: matches the class *or* the data attribute,
+   and the element itself as well as its descendants. */
+@custom-variant dark (&:where(.dark, [data-theme="dark"], .dark *, [data-theme="dark"] *));
+
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+@theme inline {
+  --font-display: "Space Grotesk", "DM Sans", sans-serif;
+  /*
+   * Lilt ships no mono token. JetBrains Mono is chosen for the criterion that
+   * actually decides a terminal font: complete box-drawing (U+2500-257F) and
+   * block-element (U+2580-259F) coverage. Without those, htop, vim splits,
+   * tmux borders and every ncurses TUI render as broken boxes over SSH. It is
+   * also strictly single-advance-width, which matters because xterm's WebGL
+   * renderer measures one glyph and assumes it for all.
+   *
+   * Users with a Nerd Font installed can point the terminal font setting at
+   * it; bundling one would add 2-4 MB per weight to a "lightweight" product.
+   */
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --radius-control-sm: 0.75rem;
+  --radius-control: 1rem;
+  --radius-card: 1rem;
+  --radius-dialog: 1.25rem;
+  --duration-fast: 140ms;
+  --duration-base: 220ms;
+  --duration-expressive: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --color-lilt-chart-5: var(--lilt-chart-5);
+  --color-lilt-chart-4: var(--lilt-chart-4);
+  --color-lilt-chart-3: var(--lilt-chart-3);
+  --color-lilt-chart-2: var(--lilt-chart-2);
+  --color-lilt-chart-1: var(--lilt-chart-1);
+  --color-lilt-selection-text: var(--lilt-selection-text);
+  --color-lilt-danger-text: var(--lilt-danger-text);
+  --color-lilt-danger-soft-hover: var(--lilt-danger-soft-hover);
+  --color-lilt-danger-soft: var(--lilt-danger-soft);
+  --color-lilt-danger: var(--lilt-danger);
+  --color-lilt-highlight: var(--lilt-highlight);
+  --color-lilt-warning: var(--lilt-warning);
+  --color-lilt-focus: var(--lilt-focus);
+  --color-lilt-primary-text: var(--lilt-primary-text);
+  --color-lilt-primary-soft: var(--lilt-primary-soft);
+  --color-lilt-primary-tint: var(--lilt-primary-tint);
+  --color-lilt-primary: var(--lilt-primary);
+  --color-lilt-button-border: var(--lilt-button-border);
+  --color-lilt-button-text: var(--lilt-button-text);
+  --color-lilt-button-hover: var(--lilt-button-hover);
+  --color-lilt-button: var(--lilt-button);
+  --color-lilt-border-strong: var(--lilt-border-strong);
+  --color-lilt-border: var(--lilt-border);
+  --color-lilt-text-subtle: var(--lilt-text-subtle);
+  --color-lilt-text-muted: var(--lilt-text-muted);
+  --color-lilt-text: var(--lilt-text);
+  --color-lilt-field: var(--lilt-field);
+  --color-lilt-surface-2: var(--lilt-surface-2);
+  --color-lilt-surface: var(--lilt-surface);
+  --color-lilt-canvas: var(--lilt-canvas);
+}
+
+:root {
+  --lilt-canvas: #f8f7f3;
+  --lilt-surface: #fdfcf8;
+  --lilt-surface-2: #efede7;
+  --lilt-field: #fbfaf6;
+  --lilt-text: #121713;
+  --lilt-text-muted: #475249;
+  --lilt-text-subtle: #69746c;
+  --lilt-border: #c4ccc5;
+  --lilt-border-strong: #7c887f;
+  --lilt-button: #121713;
+  --lilt-button-hover: #283029;
+  --lilt-button-text: #f7f8f3;
+  --lilt-button-border: #121713;
+  --lilt-primary: #167f55;
+  --lilt-primary-tint: #aeeacf;
+  --lilt-primary-soft: #e3f7ed;
+  --lilt-primary-text: #164c35;
+  --lilt-focus: #167f55;
+  --lilt-warning: #ffd0b5;
+  --lilt-highlight: #f8e8a6;
+  --lilt-danger: #a62b3b;
+  --lilt-danger-soft: #fde8eb;
+  --lilt-danger-soft-hover: #f9d7dc;
+  --lilt-danger-text: #7b1b2a;
+  --lilt-selection-text: #102117;
+  --lilt-chart-1: #167f55;
+  --lilt-chart-2: #d97a4e;
+  --lilt-chart-3: #b3902c;
+  --lilt-chart-4: #a62b3b;
+  --lilt-chart-5: #5c7263;
+}
+
+.dark {
+  --lilt-canvas: #101411;
+  --lilt-surface: #171c18;
+  --lilt-surface-2: #222923;
+  --lilt-field: #141915;
+  --lilt-text: #f1f4ee;
+  --lilt-text-muted: #c3ccc4;
+  --lilt-text-subtle: #9ca79f;
+  --lilt-border: #465149;
+  --lilt-border-strong: #88948b;
+  --lilt-button: #eef2ec;
+  --lilt-button-hover: #dce3dd;
+  --lilt-button-text: #111612;
+  --lilt-button-border: #eef2ec;
+  --lilt-primary: #a5e5c6;
+  --lilt-primary-tint: #a5e5c6;
+  --lilt-primary-soft: #1d3b2d;
+  --lilt-primary-text: #b9f0d3;
+  --lilt-focus: #a5e5c6;
+  --lilt-warning: #7a4935;
+  --lilt-highlight: #5d532c;
+  --lilt-danger: #ff94a2;
+  --lilt-danger-soft: #4b2028;
+  --lilt-danger-soft-hover: #5d2630;
+  --lilt-danger-text: #ffb3bd;
+  --lilt-selection-text: #102117;
+  --lilt-chart-1: #a5e5c6;
+  --lilt-chart-2: #ffb98c;
+  --lilt-chart-3: #f0d778;
+  --lilt-chart-4: #ff94a2;
+  --lilt-chart-5: #9cb3a4;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  body {
+    background: var(--lilt-canvas);
+    color: var(--lilt-text);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--lilt-primary-tint);
+    color: var(--lilt-selection-text);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+    button:hover,
+    a:hover,
+    article:hover {
+      transform: none !important;
+    }
+  }
+}
+
+@utility doodle-underline {
+    position: relative;
+    display: inline-block;
+  &::after {
+    position: absolute;
+    right: -0.03em;
+    bottom: -0.08em;
+    left: -0.03em;
+    height: 0.12em;
+    border-radius: 999px;
+    background: var(--lilt-primary-tint);
+    content: "";
+    transform: rotate(-1deg);
+  }
 }

@@ -1,14 +1,31 @@
 {
   "name": "tern-workspace",
   "private": true,
-  "workspaces": ["ui"],
+  "workspaces": [
+    "ui"
+  ],
   "scripts": {
     "tauri": "cd apps/desktop && tauri",
     "dev": "bun run tauri dev",
-    "build": "bun run tauri build"
+    "build": "bun run tauri build",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "test": "bun run --filter @tern/ui test",
+    "test:e2e": "bun run --filter @tern/ui test:e2e"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2.11.0",
-    "@xterm/headless": "^6.0.0"
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^26.1.1",
+    "@xterm/headless": "^6.0.0",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.10"
   }
 }

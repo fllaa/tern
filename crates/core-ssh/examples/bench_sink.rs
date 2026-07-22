@@ -53,14 +53,7 @@ async fn main() {
 
     let cfg = SessionConfig {
         port,
-        ..SessionConfig::new(
-            host,
-            "tern",
-            AuthMethod::KeyFile {
-                path: key.into(),
-                passphrase: None,
-            },
-        )
+        ..SessionConfig::new(host, "tern", AuthMethod::key_file(key, None))
     };
     let session = SshSession::connect(cfg, accept_any_host_key())
         .await

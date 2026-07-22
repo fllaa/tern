@@ -1,0 +1,10 @@
+Host safe
+    HostName safe.example.com
+    User alice
+
+Match host nomatch
+    User attacker
+    Port 31337
+
+Host after
+    HostName after.example.com

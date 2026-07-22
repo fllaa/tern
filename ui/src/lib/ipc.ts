@@ -21,7 +21,10 @@ export type Target =
       auth: AuthMethodDto;
       insecure_accept_host_key?: boolean;
     }
-  | { kind: "local_pty"; program: string | null; args?: string[] };
+  | { kind: "local_pty"; program: string | null; args?: string[] }
+  // The product path. No credential crosses the boundary — Rust resolves the
+  // stored host's secret from the OS keyring itself.
+  | { kind: "saved_host"; host_id: number };
 
 export interface OpenSessionReq {
   target: Target;
@@ -35,15 +38,51 @@ export interface OpenSessionReq {
 export type SessionEvent =
   | {
       event: "host_key_prompt";
+      // The id to answer this prompt with. It arrives on the event because
+      // `open_session` has not returned the id yet — it is blocked on this very
+      // prompt — so `session.id` is still empty here.
+      session_id: string;
       host: string;
       port: number;
       algorithm: string;
       fingerprint_sha256: string;
     }
+  // Refused already — the connect has failed by the time this arrives. Must
+  // never render as the same "continue?" dialog as host_key_prompt.
+  | {
+      event: "host_key_changed";
+      host: string;
+      port: number;
+      algorithm: string;
+      recorded_fingerprint: string;
+      presented_fingerprint: string;
+      known_hosts_path: string;
+      known_hosts_line: number;
+    }
+  | {
+      event: "host_key_revoked";
+      host: string;
+      port: number;
+      known_hosts_path: string;
+      known_hosts_line: number;
+    }
   | { event: "connected" }
+  // A reconnect attempt is scheduled after a transport drop. Informational —
+  // the session id and terminal are unchanged; "connected" follows on success,
+  // "disconnected" when the supervisor gives up.
+  | { event: "reconnecting"; attempt: number; max_attempts: number; delay_ms: number }
+  // Transport died. Distinct from "exited", which is a shell ending normally.
   | { event: "disconnected"; reason: string }
   | { event: "exited"; code: number | null }
-  | { event: "error"; message: string };
+  | { event: "error"; message: string }
+  // Non-fatal. Emitted when the connection went ahead but something the user
+  // should know about did not go to plan — a saved credential that could not
+  // be read, for instance. Never terminal; "error" is the terminal one.
+  | { event: "warning"; message: string };
+
+/** Decide whether to trust a first-contact host key. */
+export type HostKeyPrompt = Extract<SessionEvent, { event: "host_key_prompt" }>;
+export type HostKeyDecision = (ev: HostKeyPrompt) => Promise<boolean>;
 
 export interface StreamStatsDto {
   bytes_in: number;
@@ -136,6 +175,14 @@ export class TermSession {
     term: Terminal,
     req: OpenSessionReq,
     onEvent?: (ev: SessionEvent) => void,
+    /**
+     * Called on first contact with an unknown host key.
+     *
+     * Omitting it **rejects** — a client with no UI wired up must refuse an
+     * unverified key, not trust one. Bench and rig flows set
+     * insecure_accept_host_key and never reach here.
+     */
+    onHostKey?: HostKeyDecision,
   ): Promise<TermSession> {
     const session = new TermSession(term);
     session.onEvent = onEvent ?? null;
@@ -145,13 +192,20 @@ export class TermSession {
 
     const events = new Channel<SessionEvent>();
     events.onmessage = (ev) => {
-      // Default TOFU handling: surface a confirm dialog. Bench/auto flows use
-      // insecure_accept_host_key and never hit this.
       if (ev.event === "host_key_prompt") {
-        const ok = window.confirm(
-          `Host key for ${ev.host}:${ev.port}\n${ev.algorithm}\n${ev.fingerprint_sha256}\n\nTrust this key?`,
-        );
-        void invoke("approve_host_key", { id: session.id, accept: ok });
+        // Answer with the id from the event, never `session.id`: `open_session`
+        // has not returned yet (it is blocked on this prompt), so `session.id`
+        // is still "". Using it would answer with an empty id the backend can
+        // route to nothing, and the connect would hang awaiting a decision that
+        // never arrives.
+        const promptId = ev.session_id;
+        const decide = onHostKey ?? (async () => false);
+        void decide(ev)
+          .then((accept) => invoke("approve_host_key", { id: promptId, accept }))
+          // The Rust side is blocked on this answer; a thrown decision must
+          // still resolve to a refusal rather than hanging the connect.
+          .catch(() => invoke("approve_host_key", { id: promptId, accept: false }))
+          .catch(() => {});
       }
       session.onEvent?.(ev);
     };
@@ -182,15 +236,31 @@ export class TermSession {
       this.onParsed?.(performance.now());
       if (flow.paused && flow.pendingBytes < LOW_WATERMARK) {
         flow.paused = false;
-        if (this.id) void invoke("resume_session", { id: this.id });
+        // Swallowed deliberately: a session torn down mid-flight (close, or a
+        // reconnect) rejects these, and an unhandled rejection per in-flight
+        // frame is noise, not signal.
+        if (this.id) void invoke("resume_session", { id: this.id }).catch(() => {});
       }
     });
 
     if (!flow.paused && flow.pendingBytes > HIGH_WATERMARK) {
       flow.paused = true;
       flow.pauseCount += 1;
-      if (this.id) void invoke("pause_session", { id: this.id });
+      if (this.id) void invoke("pause_session", { id: this.id }).catch(() => {});
     }
+  }
+
+  /**
+   * Clear live flow state before rebinding this terminal to a new transport.
+   *
+   * Distinct from `resetJsStats`, which deliberately preserves `pendingBytes`
+   * and `paused` because they describe work still in flight. Across a
+   * reconnect there is no such work — carrying the old values over would leave
+   * the client believing it had paused a producer that no longer exists.
+   */
+  resetFlowState(): void {
+    this.flow.pendingBytes = 0;
+    this.flow.paused = false;
   }
 
   resetJsStats(): void {

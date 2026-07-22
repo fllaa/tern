@@ -17,5 +17,16 @@ services:
     volumes:
       - ../.rig/ssh/authorized_keys:/rig/authorized_keys:ro
 
+  # Publickey only. Exists so the auth-chain tests can exercise the branch that
+  # skips a method the server has said it will not accept — against the main
+  # rig, which offers both, that branch never runs.
+  openssh-nopassword:
+    build: ./openssh
+    ports:
+      - "127.0.0.1:2224:22"
+    command: ["-f", "/etc/ssh/sshd_config.nopassword"]
+    volumes:
+      - ../.rig/ssh/authorized_keys:/rig/authorized_keys:ro
+
 volumes:
   bench:

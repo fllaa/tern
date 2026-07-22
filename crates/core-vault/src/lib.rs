@@ -6,7 +6,7 @@
 
 mod os_keyring;
 
-pub use os_keyring::OsKeyring;
+pub use os_keyring::{KeyringAvailability, OsKeyring};
 
 /// Errors from vault/keyring operations.
 #[derive(Debug, thiserror::Error)]

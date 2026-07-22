@@ -3,7 +3,7 @@
 // Rust-side StreamStats and written to docs/bench/results/ by the backend.
 
 import type { BenchJsStats, BenchReport, StreamStatsDto } from "./ipc";
-import { TermSession, benchFinish } from "./ipc";
+import { benchFinish, TermSession } from "./ipc";
 
 export interface ScenarioOutcome {
   name: string;
@@ -120,7 +120,8 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-const mbps = (bytes: number, ms: number) => (ms > 0 ? bytes / 1024 / 1024 / (ms / 1000) : 0);
+const mbps = (bytes: number, ms: number) =>
+  ms > 0 ? bytes / 1024 / 1024 / (ms / 1000) : 0;
 
 async function collect(
   session: TermSession,
@@ -181,8 +182,7 @@ async function runCommandScenario(
   const report = await collect(session, env, name, wall, maxStall);
   const parsedMbps = mbps(report.js.parsed_bytes, wall);
   const rustMbps = mbps(report.rust.bytes_in, wall);
-  const lossless =
-    sawMarker && report.rust.newlines_in === report.js.js_newlines;
+  const lossless = sawMarker && report.rust.newlines_in === report.js.js_newlines;
   const verdict = lossless ? "pass" : "fail";
   const detail =
     `${name}: ${parsedMbps.toFixed(1)} MB/s parsed (rust-in ${rustMbps.toFixed(1)}), ` +
@@ -229,7 +229,15 @@ async function runYesScenario(
     `pauses ${report.js.pause_count}, paused ${report.rust.paused_ms}ms total, ` +
     `stall ${maxStall.toFixed(0)}ms, newlines rust=${report.rust.newlines_in} js=${report.js.js_newlines}`;
   log(detail);
-  return { name, report, parsedMbps, rustMbps, lossless, verdict: lossless ? "pass" : "fail", detail };
+  return {
+    name,
+    report,
+    parsedMbps,
+    rustMbps,
+    lossless,
+    verdict: lossless ? "pass" : "fail",
+    detail,
+  };
 }
 
 /** 200 scripted keystrokes at a quiet prompt; latency = write() → parse of echo. */
@@ -353,7 +361,9 @@ export async function runSuite(
   log: (line: string) => void,
 ): Promise<SuiteResult> {
   const outcomes: ScenarioOutcome[] = [];
-  log(`suite start: chunk=${env.chunk_max / 1024}K tick=${env.tick_ms}ms window=${env.window_size / 1024}K renderer=${env.renderer}`);
+  log(
+    `suite start: chunk=${env.chunk_max / 1024}K tick=${env.tick_ms}ms window=${env.window_size / 1024}K renderer=${env.renderer}`,
+  );
 
   // Kill PTY echo for the streaming scenarios: the typed command must never be
   // able to satisfy a completion marker (only real program output counts).
@@ -365,7 +375,14 @@ export async function runSuite(
     await runCommandScenario(session, env, "seq2m", "seq 1 2000000", 120000, log),
   );
   outcomes.push(
-    await runCommandScenario(session, env, "cat100mb", "cat /bench/100mb.txt", 180000, log),
+    await runCommandScenario(
+      session,
+      env,
+      "cat100mb",
+      "cat /bench/100mb.txt",
+      180000,
+      log,
+    ),
   );
   if (!quick) {
     outcomes.push(await runYesScenario(session, env, 10, log));
@@ -380,7 +397,14 @@ export async function runSuite(
       ),
     );
     outcomes.push(
-      await runCommandScenario(session, env, "findroot", "find / 2>/dev/null", 120000, log),
+      await runCommandScenario(
+        session,
+        env,
+        "findroot",
+        "find / 2>/dev/null",
+        120000,
+        log,
+      ),
     );
   }
   outcomes.push(await runEchoScenario(session, env, 200, log));
@@ -392,7 +416,8 @@ export async function runSuite(
   const drops = outcomes.filter((o) => !o.lossless);
   const failures: string[] = [];
   if (drops.length > 0) failures.push(`LOSS in: ${drops.map((o) => o.name).join(", ")}`);
-  if (cat && cat.parsedMbps < 20) failures.push(`cat100mb ${cat.parsedMbps.toFixed(1)} MB/s < 20`);
+  if (cat && cat.parsedMbps < 20)
+    failures.push(`cat100mb ${cat.parsedMbps.toFixed(1)} MB/s < 20`);
   if (echo && echo.verdict === "fail") failures.push("echo p95 >= 16ms");
   const stalls = outcomes.filter((o) => (o.report.js.max_stall_ms ?? 0) > 250);
   if (stalls.length > 0)
@@ -402,6 +427,8 @@ export async function runSuite(
     ...outcomes.map((o) => `${o.verdict.toUpperCase().padEnd(4)} ${o.detail}`),
     failures.length ? `FAILED: ${failures.join(" | ")}` : "ALL THRESHOLDS PASSED",
   ];
-  summary.forEach((line) => log(`>> ${line}`));
+  summary.forEach((line) => {
+    log(`>> ${line}`);
+  });
   return { outcomes, failed: failures.length > 0, summary };
 }

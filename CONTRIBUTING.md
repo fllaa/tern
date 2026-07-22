@@ -18,9 +18,23 @@ the best odds of merging quickly.
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+bun run format          # biome: format + safe lint fixes
+bun run test            # vitest
+bun run test:e2e        # playwright layout smoke test (needs: bunx playwright install chromium)
 bun run --filter @tern/ui build
 cargo deny check        # optional locally; CI runs it
 ```
+
+The Rust integration tests need the sshd rig — `./scripts/sshd-rig.sh up`.
+They skip cleanly without it, so a green `cargo test` on a machine with no
+Docker does *not* mean the integration suite ran.
+
+`test:e2e` is a deliberately small browser tier — it loads the shell in headless
+Chromium and checks geometry, nothing else. It exists because Vitest runs under
+jsdom, which has no layout engine: every `offsetWidth` is 0, so a sidebar that
+renders 40px wide instead of 22% still passes `tsc`, Biome and every unit test.
+Put anything provable without a real browser in a `*.test.ts` instead. It needs
+no Tauri runtime and no SSH — the Rust suites cover that side.
 
 ## DCO sign-off (required)
 
@@ -49,11 +63,12 @@ CI enforces this on every pull request.
 ```
 crates/
   proto/        serde types shared across the IPC boundary
-  core-ssh/     russh session management, channels, forwards, agent
+  core-ssh/     russh session management, channels, forwards, agent, known_hosts
+  core-store/   SQLite: hosts, folders, tags, settings (no secrets, no host keys)
   term-stream/  output coalescing + flow control shared by SSH and local-PTY paths
   core-pty/     local shells via portable-pty
   core-sftp/    (Phase 3)
-  core-vault/   storage + crypto (Phase 5; OS-keyring wrapper lives here)
+  core-vault/   secrets: OS-keyring wrapper now, vault crypto in Phase 5
   core-serial/  (Phase 4)
 apps/desktop/   Tauri 2 shell — thin: wiring + capabilities only
 ui/             React + Vite + TypeScript frontend

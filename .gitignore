@@ -5,6 +5,10 @@
 node_modules/
 /ui/dist/
 
+# Playwright run artifacts (traces, reports)
+/ui/test-results/
+/ui/playwright-report/
+
 # Tauri generated schemas
 apps/desktop/gen/schemas/
 

@@ -1,0 +1,33 @@
+# A representative real-world config.
+
+Host bastion
+    HostName bastion.example.com
+    User jump
+    Port 2222
+    IdentityFile ~/.ssh/id_bastion
+
+Host web1 web2
+    HostName %h.internal.example.com
+    User deploy
+    ProxyJump bastion
+
+Host db
+    HostName db.example.com
+    ServerAliveInterval 30
+    ConnectTimeout 5
+    # Not modelled — must be reported, never silently dropped.
+    Compression yes
+    LogLevel DEBUG3
+
+Host app.legacy
+    HostName app.legacy.example.com
+
+Host old.legacy
+    HostName old.legacy.example.com
+
+Host *.legacy !old.legacy
+    User root
+
+Host *
+    User defaultuser
+    ForwardAgent yes
