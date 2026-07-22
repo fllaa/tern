@@ -13,7 +13,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'bench'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
@@ -36,7 +36,7 @@ jobs:
         # before Spike 2 landed and would have turned a missing or
         # non-executable script into a silent pass.
         run: scripts/bench-ci.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bench-results
