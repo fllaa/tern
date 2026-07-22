@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
@@ -33,6 +41,7 @@ import {
   watchSystemTheme,
 } from "./lib/appearance";
 import {
+  deleteHost,
   type Folder,
   type Host,
   keyringStatus,
@@ -55,6 +64,8 @@ export default function App() {
   const [flowLine, setFlowLine] = useState("");
 
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Host | null>(null);
+  const [deleting, setDeleting] = useState<Host | null>(null);
   const [importing, setImporting] = useState(false);
   const [palette, setPalette] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -288,6 +299,19 @@ export default function App() {
     setChanged(null);
   }, [changed]);
 
+  const confirmDelete = useCallback(async () => {
+    if (!deleting) return;
+    const { id, name } = deleting;
+    try {
+      await deleteHost(id);
+      setNotice(`Deleted ${name}.`);
+    } catch (err) {
+      setNotice(`could not delete host: ${String(err)}`);
+    }
+    setDeleting(null);
+    void refresh(query);
+  }, [deleting, query, refresh]);
+
   // Flow stats are read straight off the session object, never through the
   // store — that object mutates on every frame and would re-render at 100 Hz.
   useEffect(() => {
@@ -352,6 +376,8 @@ export default function App() {
             query={query}
             onQueryChange={setQuery}
             onOpenHost={(id) => void openHost(id)}
+            onEditHost={setEditing}
+            onDeleteHost={setDeleting}
             header={
               <div className="flex items-center gap-2 px-3 py-2.5">
                 <span className="font-display text-sm font-semibold">Tern</span>
@@ -449,8 +475,19 @@ export default function App() {
       {adding && (
         <HostNewDialog
           onClose={() => setAdding(false)}
-          onCreated={() => {
+          onSaved={() => {
             setAdding(false);
+            void refresh(query);
+          }}
+        />
+      )}
+      {editing && (
+        <HostNewDialog
+          key={editing.id}
+          editing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
             void refresh(query);
           }}
         />
@@ -496,6 +533,32 @@ export default function App() {
             setPastePending(null);
           }}
         />
+      )}
+      {deleting && (
+        <AlertDialog open onOpenChange={(open) => !open && setDeleting(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete {deleting.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Removes{" "}
+                <span className="font-medium text-[var(--lilt-text)]">
+                  {deleting.name}
+                </span>{" "}
+                ({deleting.username ? `${deleting.username}@` : ""}
+                {deleting.hostname}) and any saved credential from this machine. Open
+                sessions stay connected. This can't be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="secondary" onClick={() => setDeleting(null)}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={() => void confirmDelete()}>
+                Delete host
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );

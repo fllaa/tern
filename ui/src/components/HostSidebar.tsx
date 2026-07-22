@@ -7,6 +7,12 @@
 
 import { useMemo } from "react";
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TreeView } from "@/components/ui/tree";
@@ -73,6 +79,8 @@ export function HostSidebar({
   query,
   onQueryChange,
   onOpenHost,
+  onEditHost,
+  onDeleteHost,
   header,
   footer,
 }: {
@@ -81,10 +89,35 @@ export function HostSidebar({
   query: string;
   onQueryChange: (q: string) => void;
   onOpenHost: (hostId: number) => void;
+  onEditHost: (host: Host) => void;
+  onDeleteHost: (host: Host) => void;
   header?: React.ReactNode;
   footer?: React.ReactNode;
 }) {
   const items = useMemo(() => buildTree(hosts, folders), [hosts, folders]);
+  const byId = useMemo(() => new Map(hosts.map((h) => [h.id, h])), [hosts]);
+
+  // Right-click a host for Edit / Delete. Folders and any non-host node fall
+  // through to the plain label, so the menu is host-only. Left-click still
+  // selects (and connects) — the trigger only claims the contextmenu event.
+  const renderLabel = (node: TreeNode) => {
+    const id = hostIdOf(node.value);
+    const host = id === null ? undefined : byId.get(id);
+    if (!host) return node.label;
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger render={<span className="block w-full truncate" />}>
+          {node.label}
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => onEditHost(host)}>Edit…</ContextMenuItem>
+          <ContextMenuItem variant="danger" onClick={() => onDeleteHost(host)}>
+            Delete…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
   // Searching should reveal matches, not make the user expand folders to find
   // them, so every folder opens while a query is active.
   const expanded = useMemo(
@@ -116,6 +149,7 @@ export function HostSidebar({
             items={items}
             guides
             expanded={expanded}
+            renderLabel={renderLabel}
             onSelectedChange={(selected) => {
               const id = hostIdOf(selected[0]);
               if (id !== null) onOpenHost(id);

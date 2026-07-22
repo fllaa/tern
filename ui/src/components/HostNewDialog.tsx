@@ -34,8 +34,11 @@ import {
 import {
   type AuthKind,
   createHost,
+  type Host,
   inspectKey,
   type KeyInfo,
+  type SecretUpdate,
+  updateHost,
   verifyKeyPassphrase,
 } from "../lib/hosts-ipc";
 
@@ -43,20 +46,29 @@ const FIRST_METHODS: AuthKind[] = ["agent", "key_file", "password"];
 
 export function HostNewDialog({
   onClose,
-  onCreated,
+  onSaved,
+  editing,
 }: {
   onClose: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
+  /** When set, the form edits this host in place instead of creating one. */
+  editing?: Host;
 }) {
-  const [name, setName] = useState("");
-  const [hostname, setHostname] = useState("");
-  const [port, setPort] = useState("22");
-  const [username, setUsername] = useState("");
-  const [first, setFirst] = useState<AuthKind>("agent");
-  const [then, setThen] = useState<AuthKind | "none">("none");
-  const [keyPath, setKeyPath] = useState("");
+  const [name, setName] = useState(editing?.name ?? "");
+  const [hostname, setHostname] = useState(editing?.hostname ?? "");
+  const [port, setPort] = useState(editing ? String(editing.port) : "22");
+  const [username, setUsername] = useState(editing?.username ?? "");
+  const [first, setFirst] = useState<AuthKind>(editing?.auth ?? "agent");
+  const [then, setThen] = useState<AuthKind | "none">(
+    editing?.authFallbacks[0] ?? "none",
+  );
+  const [keyPath, setKeyPath] = useState(editing?.keyPath ?? "");
   const [secret, setSecret] = useState("");
-  const [reconnect, setReconnect] = useState(true);
+  // Off only when the host explicitly opted out; a null/absent override inherits
+  // the global default, which the switch shows as on.
+  const [reconnect, setReconnect] = useState(
+    editing ? editing.overrides.reconnectEnabled !== false : true,
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -115,6 +127,16 @@ export function HostNewDialog({
   const keyBlocks = usesKey && (!keyPath.trim() || inspecting || !!keyError || !keyInfo);
   const canSave = !busy && !!hostname.trim() && !keyBlocks;
 
+  // Tri-state credential intent, only meaningful on edit: keep what is stored
+  // unless the field was filled (set) or the method no longer stores anything,
+  // e.g. a switch to agent (clear). Create passes the plain secret instead.
+  const secretUpdate = (): SecretUpdate => {
+    if (!(wantsPassword || wantsPassphrase)) {
+      return editing?.hasSecret ? { action: "clear" } : { action: "unchanged" };
+    }
+    return secret ? { action: "set", secret } : { action: "unchanged" };
+  };
+
   const save = async () => {
     setBusy(true);
     setError("");
@@ -123,27 +145,53 @@ export function HostNewDialog({
         // Pre-flight: confirm the key parses and, if encrypted, that the
         // passphrase is right — before it reaches the keyring. A wrong
         // passphrase caught here is a form error; caught at connect time it is
-        // a mysterious auth failure.
-        await verifyKeyPassphrase(keyPath.trim(), secret || null);
+        // a mysterious auth failure. On edit with an untouched passphrase there
+        // is nothing to check: the stored one is kept and we never held it.
+        const keepStoredPassphrase = !!editing && keyInfo?.encrypted === true && !secret;
+        if (!keepStoredPassphrase) {
+          await verifyKeyPassphrase(keyPath.trim(), secret || null);
+        }
       }
 
-      const store = wantsPassword || wantsPassphrase ? secret : "";
-      await createHost(
-        {
-          name: name.trim() || hostname.trim(),
-          hostname: hostname.trim(),
-          port: Number(port) || 22,
-          username: username.trim(),
-          auth: first,
-          authFallbacks: then === "none" ? [] : [then],
-          keyPath: usesKey ? keyPath.trim() || null : null,
-          // Only the opt-out is stored; leaving it on inherits the global
-          // default, so a later change to that default still reaches this host.
-          overrides: reconnect ? undefined : { reconnectEnabled: false },
-        },
-        store || undefined,
-      );
-      onCreated();
+      if (editing) {
+        await updateHost(
+          {
+            ...editing,
+            name: name.trim() || hostname.trim(),
+            hostname: hostname.trim(),
+            port: Number(port) || 22,
+            username: username.trim(),
+            auth: first,
+            authFallbacks: then === "none" ? [] : [then],
+            keyPath: usesKey ? keyPath.trim() || null : null,
+            // Preserve any other overrides (term, keepalive, …); only the
+            // reconnect opt-out is edited here. null clears it back to inherit.
+            overrides: {
+              ...editing.overrides,
+              reconnectEnabled: reconnect ? null : false,
+            },
+          },
+          secretUpdate(),
+        );
+      } else {
+        const store = wantsPassword || wantsPassphrase ? secret : "";
+        await createHost(
+          {
+            name: name.trim() || hostname.trim(),
+            hostname: hostname.trim(),
+            port: Number(port) || 22,
+            username: username.trim(),
+            auth: first,
+            authFallbacks: then === "none" ? [] : [then],
+            keyPath: usesKey ? keyPath.trim() || null : null,
+            // Only the opt-out is stored; leaving it on inherits the global
+            // default, so a later change to that default still reaches this host.
+            overrides: reconnect ? undefined : { reconnectEnabled: false },
+          },
+          store || undefined,
+        );
+      }
+      onSaved();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -155,7 +203,7 @@ export function HostNewDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add host</DialogTitle>
+          <DialogTitle>{editing ? "Edit host" : "Add host"}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -287,7 +335,9 @@ export function HostNewDialog({
                 }
               />
               <p className="text-xs text-[var(--lilt-text-subtle)]">
-                Stored in the OS keychain, never in Tern's database.
+                {editing?.hasSecret
+                  ? "Leave blank to keep the saved one."
+                  : "Stored in the OS keychain, never in Tern's database."}
               </p>
             </Field>
           )}
