@@ -122,6 +122,11 @@ pub struct HostOverrides {
     pub window_size: Option<u32>,
     pub reconnect_enabled: Option<bool>,
     pub reconnect_max_attempts: Option<u32>,
+    /// Expose the local ssh-agent to this host. Unlike its neighbours, `None`
+    /// means *off* rather than "inherit a global" — there is no global, by
+    /// design. See `migrations/0004_forward_agent.sql`.
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

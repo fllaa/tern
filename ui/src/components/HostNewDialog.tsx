@@ -77,6 +77,12 @@ export function HostNewDialog({
   const [reconnect, setReconnect] = useState(
     editing ? editing.overrides.reconnectEnabled !== false : true,
   );
+  // The mirror image of `reconnect`: on only when the host explicitly opted in.
+  // A new host starts off, and an absent override reads as off rather than as
+  // "inherit" — there is no global agent-forwarding default to inherit.
+  const [forwardAgent, setForwardAgent] = useState(
+    editing?.overrides.forwardAgent === true,
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -215,6 +221,10 @@ export function HostNewDialog({
             overrides: {
               ...editing.overrides,
               reconnectEnabled: reconnect ? null : false,
+              // Written either way, unlike reconnect above: turning it off has
+              // to store a decision, not fall back to a default that could
+              // later change underneath a host the user switched off.
+              forwardAgent,
             },
           },
           secretUpdate(),
@@ -233,7 +243,10 @@ export function HostNewDialog({
             keyPath: usesKey ? keyPath.trim() || null : null,
             // Only the opt-out is stored; leaving it on inherits the global
             // default, so a later change to that default still reaches this host.
-            overrides: reconnect ? undefined : { reconnectEnabled: false },
+            overrides: {
+              ...(reconnect ? {} : { reconnectEnabled: false }),
+              ...(forwardAgent ? { forwardAgent: true } : {}),
+            },
           },
           store || undefined,
         );
@@ -422,6 +435,29 @@ export function HostNewDialog({
               onCheckedChange={setReconnect}
               aria-labelledby="reconnect-label"
             />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <span id="forward-agent-label" className="text-sm text-[var(--lilt-text)]">
+                Forward my ssh-agent to this host
+              </span>
+              <Switch
+                checked={forwardAgent}
+                onCheckedChange={setForwardAgent}
+                aria-labelledby="forward-agent-label"
+              />
+            </div>
+            {/* Shown only when it is on: a warning about a switch you have not
+                touched is noise, and noise is what stops warnings being read. */}
+            {forwardAgent && (
+              <p className="mt-1.5 text-xs text-[var(--lilt-warning-text,var(--lilt-danger-text))]">
+                While you are connected, anyone with root on this host can use your agent
+                to log in anywhere your keys are trusted. They cannot copy the keys. Turn
+                this on for hosts you trust to reach further hosts — never on a shared or
+                untrusted machine.
+              </p>
+            )}
           </div>
 
           {error && <p className="text-xs text-[var(--lilt-danger-text)]">{error}</p>}

@@ -100,6 +100,11 @@ pub fn scan(path: &Path, store: &Store) -> Result<Scan, StoreError> {
             overrides: HostOverrides {
                 keepalive_secs: resolved.server_alive_interval,
                 connect_timeout_secs: resolved.connect_timeout,
+                // Carried across rather than dropped: `ForwardAgent yes` in a
+                // config the user already wrote is them asking for it on that
+                // host, which is exactly the per-host opt-in this setting is.
+                // Absent stays absent, so nothing is switched on by importing.
+                forward_agent: resolved.forward_agent,
                 ..HostOverrides::default()
             },
             disposition: if existing.is_some() {

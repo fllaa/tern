@@ -64,6 +64,11 @@ pub fn for_host(
     if let Some(window) = o.window_size {
         cfg.window_size = window;
     }
+    // `unwrap_or(false)`, not the `if let Some` the other overrides use: an
+    // unset flag must read as off. There is no global to inherit, and "we
+    // could not tell" has to fail closed for a setting that hands the remote
+    // the ability to authenticate as the user.
+    cfg.forward_agent = o.forward_agent.unwrap_or(false);
 
     // The request wins over the host record: these are data-path tuning knobs
     // the caller set for this specific session (the benchmark harness relies
@@ -131,6 +136,24 @@ mod tests {
         let host = host_with(|d| d.overrides.keepalive_secs = Some(0));
         let cfg = for_host(&host, vec![AuthMethod::Agent], Vec::new(), None);
         assert_eq!(cfg.keepalive_interval, None);
+    }
+
+    /// The fail-closed case. Every host predating the feature has `None` here,
+    /// and none of them agreed to hand a remote their agent.
+    #[test]
+    fn agent_forwarding_is_off_for_a_host_that_never_asked() {
+        let host = host_with(|_| {});
+        assert_eq!(host.overrides.forward_agent, None);
+        assert!(!for_host(&host, vec![AuthMethod::Agent], Vec::new(), None).forward_agent);
+    }
+
+    #[test]
+    fn agent_forwarding_is_on_only_when_the_host_opted_in() {
+        let on = host_with(|d| d.overrides.forward_agent = Some(true));
+        assert!(for_host(&on, vec![AuthMethod::Agent], Vec::new(), None).forward_agent);
+
+        let off = host_with(|d| d.overrides.forward_agent = Some(false));
+        assert!(!for_host(&off, vec![AuthMethod::Agent], Vec::new(), None).forward_agent);
     }
 
     #[test]

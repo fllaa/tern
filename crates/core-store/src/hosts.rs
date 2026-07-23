@@ -14,7 +14,7 @@ const HOST_COLUMNS: &str = "id, folder_id, name, hostname, port, username, auth_
      secret_ref, key_path, term, keepalive_secs, keepalive_max, connect_timeout_secs, \
      window_size, reconnect_enabled, reconnect_max_attempts, proxy_jump, source, \
      source_alias, color, notes, last_connected_at, connect_count, created_at, updated_at, \
-     auth_fallbacks";
+     auth_fallbacks, forward_agent";
 
 pub struct HostRepo<'a> {
     store: &'a Store,
@@ -46,6 +46,8 @@ fn row_to_host(row: &Row<'_>) -> rusqlite::Result<Host> {
             window_size: row.get(13)?,
             reconnect_enabled: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
             reconnect_max_attempts: row.get(15)?,
+            // Appended, like `auth_fallbacks` below and for the same reason.
+            forward_agent: row.get::<_, Option<i64>>(26)?.map(|v| v != 0),
         },
         proxy_jump: row.get(16)?,
         source: HostSource::try_from(source.as_str()).map_err(to_sql_err)?,
@@ -84,12 +86,12 @@ impl<'a> HostRepo<'a> {
                 folder_id, name, hostname, port, username, auth_method, secret_ref, key_path,
                 term, keepalive_secs, keepalive_max, connect_timeout_secs, window_size,
                 reconnect_enabled, reconnect_max_attempts, proxy_jump, source, source_alias,
-                color, notes, created_at, updated_at, auth_fallbacks
+                color, notes, created_at, updated_at, auth_fallbacks, forward_agent
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21, ?21, ?22
+                ?19, ?20, ?21, ?21, ?22, ?23
              )",
             params![
                 draft.folder_id,
@@ -114,6 +116,7 @@ impl<'a> HostRepo<'a> {
                 draft.notes,
                 ts,
                 encode_auth_fallbacks(&draft.auth_fallbacks),
+                draft.overrides.forward_agent.map(i64::from),
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -190,7 +193,7 @@ impl<'a> HostRepo<'a> {
                 keepalive_secs = ?11, keepalive_max = ?12, connect_timeout_secs = ?13,
                 window_size = ?14, reconnect_enabled = ?15, reconnect_max_attempts = ?16,
                 proxy_jump = ?17, source = ?18, source_alias = ?19, color = ?20,
-                notes = ?21, updated_at = ?22, auth_fallbacks = ?23
+                notes = ?21, updated_at = ?22, auth_fallbacks = ?23, forward_agent = ?24
              WHERE id = ?1",
             params![
                 host.id,
@@ -216,6 +219,7 @@ impl<'a> HostRepo<'a> {
                 host.notes,
                 now(),
                 encode_auth_fallbacks(&host.auth_fallbacks),
+                host.overrides.forward_agent.map(i64::from),
             ],
         )?;
         if changed == 0 {

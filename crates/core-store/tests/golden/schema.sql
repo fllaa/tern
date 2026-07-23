@@ -60,7 +60,7 @@ CREATE TABLE hosts (
   connect_count          INTEGER NOT NULL DEFAULT 0,
   created_at             INTEGER NOT NULL,
   updated_at             INTEGER NOT NULL
-, auth_fallbacks TEXT);
+, auth_fallbacks TEXT, forward_agent INTEGER CHECK (forward_agent IN (0, 1)));
 CREATE TABLE schema_migrations (
   version    INTEGER PRIMARY KEY,
   name       TEXT    NOT NULL,

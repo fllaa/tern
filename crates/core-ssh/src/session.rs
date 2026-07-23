@@ -15,7 +15,7 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::ssh_key::HashAlg;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
+use russh::{ChannelMsg, ChannelOpenFailure, Disconnect, MethodKind, MethodSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
@@ -65,6 +65,9 @@ struct ClientHandler {
     /// the connect timeout can tell "the network is hung" from "the user is
     /// still reading the fingerprint" and not fire on the latter.
     awaiting_user: Arc<AtomicBool>,
+    /// Whether this hop may open agent-forwarding channels back to us. False
+    /// for every jump hop and for any target that did not opt in.
+    forward_agent: bool,
 }
 
 impl client::Handler for ClientHandler {
@@ -96,12 +99,76 @@ impl client::Handler for ClientHandler {
         info!(host = %self.host, accepted, "host key decision received");
         Ok(accepted)
     }
+
+    /// Bridge a forwarded-agent channel to the local ssh-agent.
+    ///
+    /// russh's default implementation accepts the channel and then drops it,
+    /// which is a working *no*: the remote's `ssh-add -l` gets an immediate
+    /// EOF. The forwarding has to be built here, and it is a byte pipe — the
+    /// agent protocol is opaque to us, and deliberately stays that way. We copy
+    /// frames; we never parse, log, or cache them.
+    ///
+    /// The check below is the second lock on the same door. The first is that
+    /// we only request forwarding for a host that asked for it — but a hostile
+    /// or compromised server can open this channel whether or not it was
+    /// requested, so an unsolicited one is refused rather than serviced.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.forward_agent {
+            warn!(
+                host = %self.host,
+                "agent forward: refused an unrequested channel from the server",
+            );
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+
+        // Dial the agent before accepting, so an agent that is gone produces a
+        // clean refusal rather than a channel that opens and then dies. This
+        // awaits inside the session loop, but only on a local socket connect.
+        let agent = match connect_agent_transport().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!(host = %self.host, error = %e, "agent forward: no local agent to bridge to");
+                reply.reject(ChannelOpenFailure::ConnectFailed).await;
+                return Ok(());
+            }
+        };
+        reply.accept().await;
+        debug!(host = %self.host, "agent forward: bridging a channel to the local agent");
+
+        // Detached: one of these exists per signing request the remote makes,
+        // and the session loop must not be held for the length of any of them.
+        // Both ends close when either side hangs up, so the task cannot outlive
+        // the channel it serves.
+        tokio::spawn(async move {
+            let mut remote = channel.into_stream();
+            let mut agent = agent;
+            match tokio::io::copy_bidirectional(&mut remote, &mut agent).await {
+                Ok((to_agent, to_remote)) => {
+                    debug!(to_agent, to_remote, "agent forward: channel finished");
+                }
+                // Routine: the remote closes the channel when its client exits,
+                // which surfaces here as a reset rather than a clean EOF.
+                Err(e) => debug!(error = %e, "agent forward: channel ended"),
+            }
+        });
+        Ok(())
+    }
 }
 
 /// An authenticated SSH session. Open shells with [`SshSession::open_shell`].
 pub struct SshSession {
     handle: client::Handle<ClientHandler>,
     term: String,
+    /// Whether to ask the target to forward our agent when opening a shell.
+    forward_agent: bool,
     /// Intermediate jump-hop sessions, held only to keep their tunnels open.
     /// A `Handle` owns the sender to its session task; dropping it winds that
     /// task down and collapses the tunnel the next hop rides on, so the target
@@ -116,6 +183,8 @@ struct Hop<'a> {
     port: u16,
     username: &'a str,
     auth: &'a [AuthMethod],
+    /// Whether this hop is allowed to open agent-forwarding channels back.
+    forward_agent: bool,
 }
 
 impl<'a> Hop<'a> {
@@ -125,6 +194,10 @@ impl<'a> Hop<'a> {
             port: j.port,
             username: &j.username,
             auth: &j.auth,
+            // Never for a bastion: it is the host most exposed to the internet
+            // and the least reason to hold a handle on the user's agent. The
+            // target is reached over its tunnel regardless.
+            forward_agent: false,
         }
     }
     fn target(cfg: &'a SessionConfig) -> Self {
@@ -133,6 +206,7 @@ impl<'a> Hop<'a> {
             port: cfg.port,
             username: &cfg.username,
             auth: &cfg.auth,
+            forward_agent: cfg.forward_agent,
         }
     }
 }
@@ -147,6 +221,7 @@ fn new_handler(
         port: hop.port,
         on_host_key: Arc::clone(on_host_key),
         awaiting_user: Arc::clone(awaiting_user),
+        forward_agent: hop.forward_agent,
     }
 }
 
@@ -283,6 +358,7 @@ impl SshSession {
         Ok(Self {
             handle: prev,
             term: cfg.term.clone(),
+            forward_agent: cfg.forward_agent,
             _jumps: jumps,
         })
     }
@@ -302,6 +378,14 @@ impl SshSession {
         debug!(cols, rows, term = %self.term, "shell: opening session channel");
         let channel = self.handle.channel_open_session().await?;
         let (mut read_half, write_half) = channel.split();
+        // Before the PTY, as OpenSSH does: the request tells the server it may
+        // open agent channels back on this session. `want_reply: false` because
+        // a server that refuses is not a reason to fail the shell — the user
+        // gets a session without agent access, which is the safe direction.
+        if self.forward_agent {
+            info!("shell: requesting agent forwarding");
+            write_half.agent_forward(false).await?;
+        }
         write_half
             .request_pty(
                 false,
@@ -574,12 +658,13 @@ async fn connect_agent() -> Result<DynAgent, SshError> {
 /// A failure here reports *both* attempts. "No ssh-agent" with no further
 /// detail is unactionable on a platform where the answer is usually "the
 /// service is not running" for one of two different services.
+/// Fixed path for the OpenSSH agent service; not configurable in OpenSSH for
+/// Windows, so hardcoding it is correct rather than lazy.
+#[cfg(windows)]
+const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
 #[cfg(windows)]
 async fn connect_agent() -> Result<DynAgent, SshError> {
-    /// Fixed path for the OpenSSH agent service; not configurable in OpenSSH
-    /// for Windows, so hardcoding it is correct rather than lazy.
-    const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
-
     let openssh = match AgentClient::connect_named_pipe(OPENSSH_PIPE).await {
         Ok(agent) => return Ok(agent.dynamic()),
         Err(e) => e,
@@ -596,6 +681,65 @@ async fn connect_agent() -> Result<DynAgent, SshError> {
 async fn connect_agent() -> Result<DynAgent, SshError> {
     Err(SshError::Agent(
         "ssh-agent auth is not supported on this platform".into(),
+    ))
+}
+
+/// A raw byte stream to the local ssh-agent, for forwarding.
+///
+/// Distinct from [`DynAgent`] on purpose. That is a *client* — it speaks the
+/// agent protocol so we can ask for signatures during our own authentication.
+/// This is the socket underneath, because forwarding must not interpret the
+/// protocol at all: the remote's agent client and the local agent talk to each
+/// other, and we are the wire.
+#[cfg(unix)]
+type AgentTransport = tokio::net::UnixStream;
+
+#[cfg(windows)]
+type AgentTransport = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// Nothing to bridge to on a platform with neither; the connector below always
+/// fails, so this type is never actually constructed.
+#[cfg(not(any(unix, windows)))]
+type AgentTransport = tokio::io::Empty;
+
+#[cfg(unix)]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    let sock = std::env::var_os("SSH_AUTH_SOCK")
+        .ok_or_else(|| SshError::Agent("SSH_AUTH_SOCK is not set".into()))?;
+    tokio::net::UnixStream::connect(&sock)
+        .await
+        .map_err(|e| SshError::Agent(format!("{}: {e}", std::path::Path::new(&sock).display())))
+}
+
+/// Only OpenSSH's agent can be forwarded on Windows.
+///
+/// Pageant is reachable for *authentication* (see [`connect_agent`]) because
+/// russh implements its shared-memory transport, but forwarding needs a stream
+/// to copy bytes across and shared memory is not one. Nothing can be bridged
+/// short of reimplementing an agent that proxies to Pageant, which is a
+/// different feature. Pageant users can still authenticate normally; they
+/// cannot forward.
+///
+/// `async` with nothing to await: opening a named pipe is synchronous, unlike
+/// the unix connect. The signature matches its siblings because one call site
+/// awaits all three, and a cfg-split at the call site would be worse than an
+/// idle future here.
+#[cfg(windows)]
+#[allow(clippy::unused_async)]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    ClientOptions::new()
+        .open(OPENSSH_PIPE)
+        .map_err(|e| SshError::Agent(format!(
+            "{OPENSSH_PIPE}: {e}. Agent forwarding needs the OpenSSH agent; Pageant cannot be forwarded."
+        )))
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    Err(SshError::Agent(
+        "agent forwarding is not supported on this platform".into(),
     ))
 }
 

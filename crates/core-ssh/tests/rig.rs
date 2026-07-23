@@ -544,3 +544,120 @@ async fn the_segmented_host_is_unreachable_without_the_jump() {
         "the segmented host must be unreachable without the jump"
     );
 }
+
+/// Agent forwarding needs a local agent to bridge *to*. Unlike the rig, that is
+/// the developer's own environment, so the tests below skip rather than fail
+/// when there is none.
+macro_rules! require_local_agent {
+    () => {
+        match std::env::var("SSH_AUTH_SOCK") {
+            Ok(sock) if !sock.is_empty() => sock,
+            _ => {
+                eprintln!("SKIP: no local ssh-agent (SSH_AUTH_SOCK unset)");
+                return;
+            }
+        }
+    };
+}
+
+/// End-to-end proof that the forwarded channel is bridged, not merely accepted.
+///
+/// russh's default handler accepts an agent channel and then drops it, which
+/// looks identical from the client side and fails only on the remote — so a
+/// test that checked our own state would pass against a bridge that does
+/// nothing. This drives the whole loop instead: `ssh-add` on the remote opens
+/// the forwarded socket, sshd opens a channel back to us, our handler copies it
+/// to the local agent, and the agent's answer returns the same way.
+///
+/// The assertion is on what `ssh-add` *says*, not on its exit code. A bridge
+/// that accepts and then drops the channel — russh's default, and the exact
+/// regression this guards — still exits 1, indistinguishable from an agent that
+/// is reachable but holds no keys. The message is not ambiguous: a reachable
+/// agent reports its identities or says it has none, while a dropped channel
+/// produces a read error. So a developer whose agent holds no keys still gets a
+/// real test.
+#[tokio::test]
+async fn agent_forwarding_reaches_the_local_agent() {
+    require_rig!(OPENSSH_PORT);
+    require_local_agent!();
+
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        forward_agent: true,
+        ..SessionConfig::new(rig_host(), "tern", key_auth())
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("connect to rig");
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+
+    // sshd only sets SSH_AUTH_SOCK when it has set up a forwarding socket, so
+    // this alone separates "the request arrived" from "nothing was requested".
+    // The `$((0+0))` is what keeps the needle out of the PTY's echo of the
+    // command itself — the same trick the echo tests above use.
+    shell
+        .write("echo \"sock$((0+0))=${SSH_AUTH_SOCK:-none}\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "sock0=", Duration::from_secs(10)).await;
+    let sock = out
+        .split("sock0=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("socket path in output");
+    assert_ne!(sock, "none", "sshd set up no agent socket on the remote");
+
+    shell
+        .write("echo \"begin$((0+0))\"; ssh-add -l 2>&1; echo \"end$((0+0))\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "end0", Duration::from_secs(10)).await;
+    let said = out
+        .split("begin0")
+        .nth(1)
+        .and_then(|rest| rest.split("end0").next())
+        .expect("ssh-add output between the markers")
+        .trim()
+        .to_owned();
+
+    assert!(
+        !said.to_ascii_lowercase().contains("error"),
+        "the remote could not talk to the forwarded agent — the bridge is not \
+         copying bytes. ssh-add said: {said:?}",
+    );
+    assert!(
+        // Either answer proves the local agent replied through the bridge.
+        said.contains("SHA256:") || said.contains("no identities"),
+        "unexpected ssh-add output {said:?}; is ssh-add installed in the rig image?",
+    );
+
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// The control that makes the test above mean something, and the one that
+/// matters for security: a session that did not opt in gets no agent socket on
+/// the remote at all. If this ever passes trivially — because forwarding leaked
+/// on by default — the whole opt-in is decorative.
+#[tokio::test]
+async fn no_agent_is_forwarded_unless_the_host_opted_in() {
+    require_rig!(OPENSSH_PORT);
+    let session = connect(OPENSSH_PORT, key_auth()).await;
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+    shell
+        .write("echo \"sock$((0+0))=${SSH_AUTH_SOCK:-none}\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "sock0=", Duration::from_secs(10)).await;
+    let sock = out
+        .split("sock0=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("socket path in output");
+    assert_eq!(
+        sock, "none",
+        "a session that never requested forwarding was given an agent socket",
+    );
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
+}

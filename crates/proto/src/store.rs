@@ -28,6 +28,10 @@ pub struct HostOverridesDto {
     pub window_size: Option<u32>,
     pub reconnect_enabled: Option<bool>,
     pub reconnect_max_attempts: Option<u32>,
+    /// Expose the local ssh-agent to this host. `None` means off, not
+    /// "inherit" — there is no global agent-forwarding setting, deliberately.
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

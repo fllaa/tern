@@ -63,6 +63,7 @@ fn overrides(dto: &HostOverridesDto) -> HostOverrides {
         window_size: dto.window_size,
         reconnect_enabled: dto.reconnect_enabled,
         reconnect_max_attempts: dto.reconnect_max_attempts,
+        forward_agent: dto.forward_agent,
     }
 }
 
@@ -75,6 +76,7 @@ fn overrides_dto(o: &HostOverrides) -> HostOverridesDto {
         window_size: o.window_size,
         reconnect_enabled: o.reconnect_enabled,
         reconnect_max_attempts: o.reconnect_max_attempts,
+        forward_agent: o.forward_agent,
     }
 }
 

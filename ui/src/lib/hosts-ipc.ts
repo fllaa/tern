@@ -18,6 +18,9 @@ export interface HostOverrides {
   windowSize?: number | null;
   reconnectEnabled?: boolean | null;
   reconnectMaxAttempts?: number | null;
+  /** Expose the local ssh-agent to this host. Unlike its neighbours, absent
+   *  means *off* rather than "inherit a global" — there is no global. */
+  forwardAgent?: boolean | null;
 }
 
 export interface Host {

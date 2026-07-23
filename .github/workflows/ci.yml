@@ -142,10 +142,16 @@ jobs:
       # suite would stay green while exercising none of the key handling.
       - name: Generate private-key fixtures
         run: ./scripts/gen-key-fixtures.sh
+      # Same hazard once more, for agent forwarding: a runner has no ssh-agent,
+      # so require_local_agent! makes the bridge test skip and report ok while
+      # testing nothing. The agent is started here with the rig key loaded, so
+      # the forwarded `ssh-add -l` on the remote has a real identity to list.
       - name: Integration tests against the rig
         run: |
           dbus-run-session -- bash -c '
             echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets --daemonize
+            eval "$(ssh-agent -s)" > /dev/null
+            ssh-add .rig/ssh/id_ed25519
             cargo test --workspace --locked
           '
       - name: Rig logs on failure

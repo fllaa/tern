@@ -1,0 +1,13 @@
+-- Per-host agent forwarding: expose the local ssh-agent to this host.
+--
+-- Nullable and unset by default, like every other column in the overrides
+-- block, and the code that reads it treats NULL as *off* rather than as
+-- "inherit". That asymmetry is deliberate: the other overrides tune a
+-- connection, while this one delegates the ability to authenticate as the user
+-- to whoever can reach the socket on the far end. There is no global default to
+-- inherit and no plan to add one — a setting that could switch forwarding on
+-- for every host at once is the shape of mistake worth designing out.
+--
+-- Hosts created before this migration keep the behaviour they had: NULL, which
+-- reads as off.
+ALTER TABLE hosts ADD COLUMN forward_agent INTEGER CHECK (forward_agent IN (0, 1));

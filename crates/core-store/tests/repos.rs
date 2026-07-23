@@ -37,6 +37,44 @@ fn host_round_trips_through_create_and_get() {
 }
 
 #[test]
+fn agent_forwarding_round_trips_and_defaults_to_unset() {
+    // The flag is what lets a remote root authenticate onward as the user, so
+    // two things are pinned here: a host that never asked for it stores NULL,
+    // and a host that did gets exactly what it asked for back — including a
+    // stored `false`, which must not decay into "unset" and then into a
+    // default someone later changes.
+    let s = store();
+    let plain = s
+        .hosts()
+        .create(&NewHost::manual("plain", "example.com"))
+        .expect("create");
+    assert_eq!(
+        s.hosts()
+            .get(plain)
+            .expect("get")
+            .expect("exists")
+            .overrides
+            .forward_agent,
+        None,
+    );
+
+    for wanted in [Some(true), Some(false)] {
+        let mut draft = NewHost::manual("fwd", "example.com");
+        draft.overrides.forward_agent = wanted;
+        let id = s.hosts().create(&draft).expect("create");
+        let mut host = s.hosts().get(id).expect("get").expect("exists");
+        assert_eq!(host.overrides.forward_agent, wanted);
+
+        // And it survives the full-record update path, which is how the edit
+        // dialog turns it back off.
+        host.overrides.forward_agent = wanted.map(|v| !v);
+        s.hosts().update(&host).expect("update");
+        let got = s.hosts().get(id).expect("get").expect("exists");
+        assert_eq!(got.overrides.forward_agent, wanted.map(|v| !v));
+    }
+}
+
+#[test]
 fn unset_overrides_stay_none_rather_than_defaulting() {
     // `None` means "inherit the global setting". If a round trip turned that
     // into a concrete value, every host would silently pin whatever the global
