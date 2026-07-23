@@ -62,6 +62,18 @@ impl fmt::Debug for AuthMethod {
     }
 }
 
+/// One hop in a `ProxyJump` chain: where to dial, and how to authenticate there.
+///
+/// Same auth shape as [`SessionConfig`] — each hop is a full SSH login in its
+/// own right, just reached over the previous hop's tunnel rather than TCP.
+#[derive(Debug, Clone)]
+pub struct JumpHop {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: Vec<AuthMethod>,
+}
+
 /// Everything needed to establish an SSH session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -89,6 +101,23 @@ pub struct SessionConfig {
     /// is the backpressure link: when the consumer stops reading, this fills,
     /// the session loop stalls, and the SSH window drains.
     pub channel_buffer_size: usize,
+    /// `ProxyJump` chain in dial order, nearest jump first. Empty means a direct
+    /// connection — the common case and what [`Self::new`] builds. Each hop is
+    /// dialed over the previous hop's tunnel; the target session runs over the
+    /// last hop.
+    pub jumps: Vec<JumpHop>,
+    /// Expose the local ssh-agent to the target host.
+    ///
+    /// Off by default and opt-in per host, because it is a real delegation of
+    /// authority: anyone who can reach the forwarded socket on the remote —
+    /// root, or any process running as the same user — can ask the local agent
+    /// to sign, and so authenticate onward as the user for as long as the
+    /// session is up. They cannot read the keys, but they do not need to.
+    ///
+    /// Applies to the final target only. Jump hops never forward: a bastion is
+    /// exactly the host you least want holding a live handle on your agent, and
+    /// the chain reaches the target without it.
+    pub forward_agent: bool,
 }
 
 impl SessionConfig {
@@ -108,6 +137,8 @@ impl SessionConfig {
             connect_timeout: Duration::from_secs(10),
             window_size: 512 * 1024,
             channel_buffer_size: 16,
+            jumps: Vec::new(),
+            forward_agent: false,
         }
     }
 }
@@ -124,6 +155,15 @@ mod tests {
         assert_eq!(cfg.window_size, 512 * 1024);
         assert_eq!(cfg.channel_buffer_size, 16);
         assert!(cfg.keepalive_interval.is_some());
+    }
+
+    /// Agent forwarding is a delegation of authority, so it is opt-in per host
+    /// and must never arrive by default. A config built without asking for it
+    /// does not forward.
+    #[test]
+    fn agent_forwarding_is_off_unless_asked_for() {
+        let cfg = SessionConfig::new("example.com", "user", AuthMethod::Agent);
+        assert!(!cfg.forward_agent);
     }
 
     /// Guards the hand-written `Debug`. If someone re-derives it, this fails

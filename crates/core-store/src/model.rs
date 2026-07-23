@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub type HostId = i64;
 pub type FolderId = i64;
 pub type TagId = i64;
+pub type SnippetId = i64;
 
 /// How a host authenticates.
 ///
@@ -121,6 +122,11 @@ pub struct HostOverrides {
     pub window_size: Option<u32>,
     pub reconnect_enabled: Option<bool>,
     pub reconnect_max_attempts: Option<u32>,
+    /// Expose the local ssh-agent to this host. Unlike its neighbours, `None`
+    /// means *off* rather than "inherit a global" — there is no global, by
+    /// design. See `migrations/0004_forward_agent.sql`.
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +227,30 @@ pub struct Tag {
     pub name: String,
     pub color: Option<String>,
     pub created_at: i64,
+}
+
+/// A reusable command body, with optional `{{variable}}` placeholders the UI
+/// prompts for before sending.
+///
+/// Plaintext by design: a snippet is a command you would have typed, not a
+/// credential. Secrets live in the OS keyring behind a host record — nothing
+/// here is encrypted or redacted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snippet {
+    pub id: SnippetId,
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A snippet to create; the store assigns the id and timestamps.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewSnippet {
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
 }
 
 /// Host list query. All fields AND together; empty means "no constraint".

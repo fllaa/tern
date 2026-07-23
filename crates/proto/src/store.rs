@@ -28,6 +28,10 @@ pub struct HostOverridesDto {
     pub window_size: Option<u32>,
     pub reconnect_enabled: Option<bool>,
     pub reconnect_max_attempts: Option<u32>,
+    /// Expose the local ssh-agent to this host. `None` means off, not
+    /// "inherit" — there is no global agent-forwarding setting, deliberately.
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +135,25 @@ pub struct TagDto {
     pub id: i64,
     pub name: String,
     pub color: Option<String>,
+}
+
+/// A snippet as the webview sees it. Timestamps are deliberately absent — the
+/// UI orders by name and never shows them, so they stay store-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetDto {
+    pub id: i64,
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewSnippetDto {
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

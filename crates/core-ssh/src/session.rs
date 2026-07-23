@@ -15,11 +15,11 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::ssh_key::HashAlg;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
+use russh::{ChannelMsg, ChannelOpenFailure, Disconnect, MethodKind, MethodSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
-use crate::config::{AuthMethod, SessionConfig};
+use crate::config::{AuthMethod, JumpHop, SessionConfig};
 use crate::error::SshError;
 
 /// Depth of the outbound `Bytes` queue between the pump and the consumer.
@@ -65,6 +65,9 @@ struct ClientHandler {
     /// the connect timeout can tell "the network is hung" from "the user is
     /// still reading the fingerprint" and not fire on the latter.
     awaiting_user: Arc<AtomicBool>,
+    /// Whether this hop may open agent-forwarding channels back to us. False
+    /// for every jump hop and for any target that did not opt in.
+    forward_agent: bool,
 }
 
 impl client::Handler for ClientHandler {
@@ -96,16 +99,180 @@ impl client::Handler for ClientHandler {
         info!(host = %self.host, accepted, "host key decision received");
         Ok(accepted)
     }
+
+    /// Bridge a forwarded-agent channel to the local ssh-agent.
+    ///
+    /// russh's default implementation accepts the channel and then drops it,
+    /// which is a working *no*: the remote's `ssh-add -l` gets an immediate
+    /// EOF. The forwarding has to be built here, and it is a byte pipe — the
+    /// agent protocol is opaque to us, and deliberately stays that way. We copy
+    /// frames; we never parse, log, or cache them.
+    ///
+    /// The check below is the second lock on the same door. The first is that
+    /// we only request forwarding for a host that asked for it — but a hostile
+    /// or compromised server can open this channel whether or not it was
+    /// requested, so an unsolicited one is refused rather than serviced.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.forward_agent {
+            warn!(
+                host = %self.host,
+                "agent forward: refused an unrequested channel from the server",
+            );
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+
+        // Dial the agent before accepting, so an agent that is gone produces a
+        // clean refusal rather than a channel that opens and then dies. This
+        // awaits inside the session loop, but only on a local socket connect.
+        let agent = match connect_agent_transport().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!(host = %self.host, error = %e, "agent forward: no local agent to bridge to");
+                reply.reject(ChannelOpenFailure::ConnectFailed).await;
+                return Ok(());
+            }
+        };
+        reply.accept().await;
+        debug!(host = %self.host, "agent forward: bridging a channel to the local agent");
+
+        // Detached: one of these exists per signing request the remote makes,
+        // and the session loop must not be held for the length of any of them.
+        // Both ends close when either side hangs up, so the task cannot outlive
+        // the channel it serves.
+        tokio::spawn(async move {
+            let mut remote = channel.into_stream();
+            let mut agent = agent;
+            match tokio::io::copy_bidirectional(&mut remote, &mut agent).await {
+                Ok((to_agent, to_remote)) => {
+                    debug!(to_agent, to_remote, "agent forward: channel finished");
+                }
+                // Routine: the remote closes the channel when its client exits,
+                // which surfaces here as a reset rather than a clean EOF.
+                Err(e) => debug!(error = %e, "agent forward: channel ended"),
+            }
+        });
+        Ok(())
+    }
 }
 
 /// An authenticated SSH session. Open shells with [`SshSession::open_shell`].
 pub struct SshSession {
     handle: client::Handle<ClientHandler>,
     term: String,
+    /// Whether to ask the target to forward our agent when opening a shell.
+    forward_agent: bool,
+    /// Intermediate jump-hop sessions, held only to keep their tunnels open.
+    /// A `Handle` owns the sender to its session task; dropping it winds that
+    /// task down and collapses the tunnel the next hop rides on, so the target
+    /// session must outlive every hop before it. Never touched directly.
+    _jumps: Vec<client::Handle<ClientHandler>>,
+}
+
+/// One dial target inside [`SshSession::connect`] — a jump hop or the final
+/// target — as borrowed views into the `SessionConfig`.
+struct Hop<'a> {
+    host: &'a str,
+    port: u16,
+    username: &'a str,
+    auth: &'a [AuthMethod],
+    /// Whether this hop is allowed to open agent-forwarding channels back.
+    forward_agent: bool,
+}
+
+impl<'a> Hop<'a> {
+    fn from_jump(j: &'a JumpHop) -> Self {
+        Self {
+            host: &j.host,
+            port: j.port,
+            username: &j.username,
+            auth: &j.auth,
+            // Never for a bastion: it is the host most exposed to the internet
+            // and the least reason to hold a handle on the user's agent. The
+            // target is reached over its tunnel regardless.
+            forward_agent: false,
+        }
+    }
+    fn target(cfg: &'a SessionConfig) -> Self {
+        Self {
+            host: &cfg.host,
+            port: cfg.port,
+            username: &cfg.username,
+            auth: &cfg.auth,
+            forward_agent: cfg.forward_agent,
+        }
+    }
+}
+
+fn new_handler(
+    hop: &Hop<'_>,
+    on_host_key: &HostKeyCallback,
+    awaiting_user: &Arc<AtomicBool>,
+) -> ClientHandler {
+    ClientHandler {
+        host: hop.host.to_owned(),
+        port: hop.port,
+        on_host_key: Arc::clone(on_host_key),
+        awaiting_user: Arc::clone(awaiting_user),
+        forward_agent: hop.forward_agent,
+    }
+}
+
+/// Poll a connect future under the re-arming host-key timeout.
+///
+/// The timeout bounds the network handshake, not the human at the TOFU dialog:
+/// when it elapses while the host-key callback is blocked on a user decision,
+/// re-arm rather than fail — the user answering is what completes the connect,
+/// within a re-armed window. Re-arming is capped at [`MAX_HOST_KEY_WAIT`] so an
+/// abandoned prompt eventually gives up. A genuinely hung handshake never sets
+/// `awaiting_user`, so it still fails at the first expiry.
+///
+/// Applied per hop, sharing one `awaiting_user`: hops connect sequentially, so
+/// at most one host-key prompt is ever open.
+async fn await_connect(
+    connect: impl Future<Output = Result<client::Handle<ClientHandler>, SshError>>,
+    connect_timeout: Duration,
+    awaiting_user: &AtomicBool,
+) -> Result<client::Handle<ClientHandler>, SshError> {
+    let mut connect = std::pin::pin!(connect);
+    let mut user_waited = Duration::ZERO;
+    loop {
+        match tokio::time::timeout(connect_timeout, &mut connect).await {
+            Ok(result) => {
+                return result.map_err(|e| match e {
+                    SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
+                    other => other,
+                });
+            }
+            Err(_elapsed)
+                if awaiting_user.load(Ordering::Relaxed) && user_waited < MAX_HOST_KEY_WAIT =>
+            {
+                user_waited = user_waited.saturating_add(connect_timeout);
+                debug!(
+                    waited = ?user_waited,
+                    "ssh connect: timeout elapsed while awaiting host-key decision; re-arming",
+                );
+            }
+            Err(_elapsed) => return Err(SshError::ConnectTimeout(connect_timeout)),
+        }
+    }
 }
 
 impl SshSession {
-    /// Connect, verify the host key via `on_host_key`, and authenticate.
+    /// Connect through any `ProxyJump` chain, verify each hop's host key via
+    /// `on_host_key`, and authenticate at each hop.
+    ///
+    /// With no jumps this is a direct TCP connect to the target — the common
+    /// case, and the single-hop path below. With jumps, hop 1 is dialed over
+    /// TCP and every later hop (and the target) rides a direct-tcpip tunnel
+    /// opened on the hop before it.
     pub async fn connect(
         cfg: SessionConfig,
         on_host_key: HostKeyCallback,
@@ -121,17 +288,15 @@ impl SshSession {
             ..client::Config::default()
         });
         let awaiting_user = Arc::new(AtomicBool::new(false));
-        let handler = ClientHandler {
-            host: cfg.host.clone(),
-            port: cfg.port,
-            on_host_key,
-            awaiting_user: Arc::clone(&awaiting_user),
-        };
 
-        // The chain, redacted to labels, is the single most useful line when a
-        // connect misbehaves: it says which methods will be tried and in what
-        // order. `method_label` never emits secret material.
-        let chain = cfg
+        // The dial order: each jump hop, then the target as the final hop. A
+        // one-element chain (no jumps) is exactly the old direct connect.
+        let mut chain: Vec<Hop<'_>> = cfg.jumps.iter().map(Hop::from_jump).collect();
+        chain.push(Hop::target(&cfg));
+
+        // The target chain, redacted to labels, is the single most useful line
+        // when a connect misbehaves. `method_label` never emits secret material.
+        let auth_chain = cfg
             .auth
             .iter()
             .map(method_label)
@@ -141,66 +306,60 @@ impl SshSession {
             host = %cfg.host,
             port = cfg.port,
             user = %cfg.username,
+            hops = cfg.jumps.len(),
             connect_timeout = ?cfg.connect_timeout,
-            auth_chain = %chain,
+            auth_chain = %auth_chain,
             "ssh connect: opening transport",
         );
 
-        // The connect timeout bounds the *network* handshake, not the human at
-        // the TOFU dialog. When it elapses while the host-key callback is
-        // blocked on the user, re-arm rather than fail — the user answering is
-        // what completes the connect, and it does so within a re-armed window.
-        // A genuinely hung handshake never sets `awaiting_user`, so it still
-        // fails at the first expiry.
-        //
-        // The re-arming is capped so an *abandoned* prompt — one superseded by a
-        // later connect that reused the shared UI resolver, say — eventually
-        // fails instead of leaking a task forever. The cap is generous: it is
-        // decision time for a human verifying a fingerprint out of band, not a
-        // network bound.
-        let mut connect = std::pin::pin!(client::connect(
-            config,
-            (cfg.host.as_str(), cfg.port),
-            handler,
-        ));
-        let mut user_waited = Duration::ZERO;
-        let mut handle = loop {
-            match tokio::time::timeout(cfg.connect_timeout, &mut connect).await {
-                Ok(result) => {
-                    break result.map_err(|e| match e {
-                        SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
-                        other => other,
-                    })?;
-                }
-                Err(_elapsed)
-                    if awaiting_user.load(Ordering::Relaxed) && user_waited < MAX_HOST_KEY_WAIT =>
-                {
-                    // Re-arm: fall through to the next loop iteration, which
-                    // polls the same pinned connect future again.
-                    user_waited = user_waited.saturating_add(cfg.connect_timeout);
-                    debug!(
-                        waited = ?user_waited,
-                        "ssh connect: timeout elapsed while awaiting host-key decision; re-arming",
-                    );
-                }
-                Err(_elapsed) => {
-                    warn!(
-                        host = %cfg.host,
-                        connect_timeout = ?cfg.connect_timeout,
-                        "ssh connect: transport handshake timed out",
-                    );
-                    return Err(SshError::ConnectTimeout(cfg.connect_timeout));
-                }
-            }
-        };
+        // Hop 1 over TCP.
+        let mut hops = chain.iter();
+        let first = hops.next().expect("chain always ends with the target");
+        let connect = client::connect(
+            Arc::clone(&config),
+            (first.host, first.port),
+            new_handler(first, &on_host_key, &awaiting_user),
+        );
+        let mut prev = await_connect(connect, cfg.connect_timeout, &awaiting_user).await?;
+        authenticate(&mut prev, first.username, first.auth).await?;
+        debug!(host = %first.host, "ssh connect: hop authenticated");
 
-        debug!(host = %cfg.host, "ssh connect: transport up; authenticating");
-        authenticate(&mut handle, &cfg).await?;
+        // Each later hop rides a tunnel opened on the previous one. The prior
+        // handles are retained (see `SshSession::_jumps`) so their tunnels stay
+        // up for the life of the target session.
+        let mut jumps: Vec<client::Handle<ClientHandler>> = Vec::new();
+        for hop in hops {
+            let open = prev.channel_open_direct_tcpip(
+                hop.host.to_owned(),
+                u32::from(hop.port),
+                "127.0.0.1",
+                0,
+            );
+            // A black-holed tunnel should fail like a hung handshake, not hang.
+            let channel = tokio::time::timeout(cfg.connect_timeout, open)
+                .await
+                .map_err(|_| SshError::ConnectTimeout(cfg.connect_timeout))??;
+            let stream = channel.into_stream();
+            jumps.push(prev);
+
+            let connect = client::connect_stream(
+                Arc::clone(&config),
+                stream,
+                new_handler(hop, &on_host_key, &awaiting_user),
+            );
+            let mut handle = await_connect(connect, cfg.connect_timeout, &awaiting_user).await?;
+            authenticate(&mut handle, hop.username, hop.auth).await?;
+            debug!(host = %hop.host, "ssh connect: hop authenticated");
+            prev = handle;
+        }
+
         info!(host = %cfg.host, user = %cfg.username, "ssh connect: session ready");
-
+        // Clone `term` rather than move it: `chain` still borrows `cfg`.
         Ok(Self {
-            handle,
-            term: cfg.term,
+            handle: prev,
+            term: cfg.term.clone(),
+            forward_agent: cfg.forward_agent,
+            _jumps: jumps,
         })
     }
 
@@ -219,6 +378,14 @@ impl SshSession {
         debug!(cols, rows, term = %self.term, "shell: opening session channel");
         let channel = self.handle.channel_open_session().await?;
         let (mut read_half, write_half) = channel.split();
+        // Before the PTY, as OpenSSH does: the request tells the server it may
+        // open agent channels back on this session. `want_reply: false` because
+        // a server that refuses is not a reason to fail the shell — the user
+        // gets a session without agent access, which is the safe direction.
+        if self.forward_agent {
+            info!("shell: requesting agent forwarding");
+            write_half.agent_forward(false).await?;
+        }
         write_half
             .request_pty(
                 false,
@@ -358,14 +525,15 @@ impl ShellChannel {
 /// the password" is the case being served.
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
-    cfg: &SessionConfig,
+    user: &str,
+    auth: &[AuthMethod],
 ) -> Result<(), SshError> {
     // What the server still offers, once it has told us. `None` means it has
     // not yet, so nothing is skipped on the first attempt.
     let mut offered: Option<MethodSet> = None;
     let mut attempts: Vec<String> = Vec::new();
 
-    for method in &cfg.auth {
+    for method in auth {
         let label = method_label(method);
 
         // Deliberately conservative: skip only against a non-empty list. The
@@ -382,7 +550,7 @@ async fn authenticate(
         }
 
         debug!(method = %label, "auth: attempting");
-        match try_method(handle, &cfg.username, method).await {
+        match try_method(handle, user, method).await {
             Ok(AuthResult::Success) => {
                 info!(method = %label, "auth: accepted");
                 return Ok(());
@@ -490,12 +658,13 @@ async fn connect_agent() -> Result<DynAgent, SshError> {
 /// A failure here reports *both* attempts. "No ssh-agent" with no further
 /// detail is unactionable on a platform where the answer is usually "the
 /// service is not running" for one of two different services.
+/// Fixed path for the OpenSSH agent service; not configurable in OpenSSH for
+/// Windows, so hardcoding it is correct rather than lazy.
+#[cfg(windows)]
+const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
 #[cfg(windows)]
 async fn connect_agent() -> Result<DynAgent, SshError> {
-    /// Fixed path for the OpenSSH agent service; not configurable in OpenSSH
-    /// for Windows, so hardcoding it is correct rather than lazy.
-    const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
-
     let openssh = match AgentClient::connect_named_pipe(OPENSSH_PIPE).await {
         Ok(agent) => return Ok(agent.dynamic()),
         Err(e) => e,
@@ -512,6 +681,65 @@ async fn connect_agent() -> Result<DynAgent, SshError> {
 async fn connect_agent() -> Result<DynAgent, SshError> {
     Err(SshError::Agent(
         "ssh-agent auth is not supported on this platform".into(),
+    ))
+}
+
+/// A raw byte stream to the local ssh-agent, for forwarding.
+///
+/// Distinct from [`DynAgent`] on purpose. That is a *client* — it speaks the
+/// agent protocol so we can ask for signatures during our own authentication.
+/// This is the socket underneath, because forwarding must not interpret the
+/// protocol at all: the remote's agent client and the local agent talk to each
+/// other, and we are the wire.
+#[cfg(unix)]
+type AgentTransport = tokio::net::UnixStream;
+
+#[cfg(windows)]
+type AgentTransport = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// Nothing to bridge to on a platform with neither; the connector below always
+/// fails, so this type is never actually constructed.
+#[cfg(not(any(unix, windows)))]
+type AgentTransport = tokio::io::Empty;
+
+#[cfg(unix)]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    let sock = std::env::var_os("SSH_AUTH_SOCK")
+        .ok_or_else(|| SshError::Agent("SSH_AUTH_SOCK is not set".into()))?;
+    tokio::net::UnixStream::connect(&sock)
+        .await
+        .map_err(|e| SshError::Agent(format!("{}: {e}", std::path::Path::new(&sock).display())))
+}
+
+/// Only OpenSSH's agent can be forwarded on Windows.
+///
+/// Pageant is reachable for *authentication* (see [`connect_agent`]) because
+/// russh implements its shared-memory transport, but forwarding needs a stream
+/// to copy bytes across and shared memory is not one. Nothing can be bridged
+/// short of reimplementing an agent that proxies to Pageant, which is a
+/// different feature. Pageant users can still authenticate normally; they
+/// cannot forward.
+///
+/// `async` with nothing to await: opening a named pipe is synchronous, unlike
+/// the unix connect. The signature matches its siblings because one call site
+/// awaits all three, and a cfg-split at the call site would be worse than an
+/// idle future here.
+#[cfg(windows)]
+#[allow(clippy::unused_async)]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    ClientOptions::new()
+        .open(OPENSSH_PIPE)
+        .map_err(|e| SshError::Agent(format!(
+            "{OPENSSH_PIPE}: {e}. Agent forwarding needs the OpenSSH agent; Pageant cannot be forwarded."
+        )))
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn connect_agent_transport() -> Result<AgentTransport, SshError> {
+    Err(SshError::Agent(
+        "agent forwarding is not supported on this platform".into(),
     ))
 }
 

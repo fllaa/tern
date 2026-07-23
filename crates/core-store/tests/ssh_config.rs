@@ -131,6 +131,31 @@ fn timeouts_map_onto_per_host_overrides() {
 }
 
 #[test]
+fn forward_agent_reaches_the_candidate() {
+    // Parsed since Phase 1 but dropped on the floor until agent forwarding
+    // existed to receive it. The fixture sets it under `Host *`, so this also
+    // pins that it inherits like any other default.
+    let s = store();
+    let scanned = scan("basic", &s);
+    assert_eq!(find(&scanned, "db").overrides.forward_agent, Some(true));
+}
+
+#[test]
+fn a_config_without_forward_agent_leaves_it_unset() {
+    // Import must not switch forwarding on for a config that never asked. This
+    // fixture has no ForwardAgent line anywhere.
+    let s = store();
+    let scanned = scan("with_match", &s);
+    for candidate in &scanned.candidates {
+        assert_eq!(
+            candidate.overrides.forward_agent, None,
+            "{} gained agent forwarding from a config that never mentions it",
+            candidate.alias
+        );
+    }
+}
+
+#[test]
 fn unmodelled_keywords_are_reported_never_silently_dropped() {
     // The promise that bounds this feature's scope: you can see what did not
     // come across.

@@ -3,6 +3,7 @@
 
 mod auth;
 mod commands;
+mod jump;
 mod reconnect;
 mod session_cfg;
 mod store_commands;
@@ -88,6 +89,10 @@ pub fn run() {
             store_commands::move_folder,
             store_commands::delete_folder,
             // tags
+            store_commands::list_snippets,
+            store_commands::create_snippet,
+            store_commands::update_snippet,
+            store_commands::delete_snippet,
             store_commands::list_tags,
             store_commands::create_tag,
             store_commands::delete_tag,

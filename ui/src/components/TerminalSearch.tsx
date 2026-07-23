@@ -1,6 +1,6 @@
 // Scrollback search bar (Cmd/Ctrl+Shift+F).
 //
-// Drives the SearchAddon on the active tab's terminal via the pool. Match
+// Drives the SearchAddon on the focused pane's terminal via the pool. Match
 // highlighting and the result count come from the addon; this is just the
 // input, the count readout, and the next/previous controls.
 
@@ -8,17 +8,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChevronIcon, CloseIcon } from "@/components/ui/icons";
 
-import type { TabId } from "../store/sessions";
+import type { PaneId } from "../store/sessions";
 import * as pool from "../terminal/pool";
 
 const iconButton =
   "flex h-7 w-7 items-center justify-center rounded-[var(--radius-control-sm)] text-[var(--lilt-text-subtle)] outline-none hover:bg-[var(--lilt-surface)] hover:text-[var(--lilt-text)] focus-visible:ring-2 focus-visible:ring-[var(--lilt-focus)]";
 
 export function TerminalSearch({
-  tabId,
+  paneId,
   onClose,
 }: {
-  tabId: TabId;
+  paneId: PaneId;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -28,26 +28,26 @@ export function TerminalSearch({
   });
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus on open and whenever the target tab changes under an open bar.
+  // Focus on open and whenever the target pane changes under an open bar.
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
 
   // The count is reported asynchronously by the addon, per terminal.
-  useEffect(() => pool.onSearchResults(tabId, setResults), [tabId]);
+  useEffect(() => pool.onSearchResults(paneId, setResults), [paneId]);
 
   const run = useCallback(
     (direction: "next" | "prev") => {
       if (!query) {
-        pool.searchClear(tabId);
+        pool.searchClear(paneId);
         setResults({ resultIndex: -1, resultCount: 0 });
         return;
       }
-      if (direction === "next") pool.searchNext(tabId, query);
-      else pool.searchPrev(tabId, query);
+      if (direction === "next") pool.searchNext(paneId, query);
+      else pool.searchPrev(paneId, query);
     },
-    [tabId, query],
+    [paneId, query],
   );
 
   // Incremental: re-search as the query changes so highlighting tracks typing.
@@ -56,7 +56,7 @@ export function TerminalSearch({
   }, [run]);
 
   const close = () => {
-    pool.searchClear(tabId);
+    pool.searchClear(paneId);
     onClose();
   };
 

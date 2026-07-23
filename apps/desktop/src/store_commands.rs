@@ -1,4 +1,4 @@
-//! Host / folder / tag / known-hosts commands.
+//! Host / folder / tag / snippet / known-hosts commands.
 //!
 //! Every one of these runs the (synchronous) repo call on a blocking thread.
 //! `core-store` holds its connection behind a `std::sync::Mutex`, so touching
@@ -11,12 +11,13 @@
 
 use tauri::State;
 use tern_core_ssh::KnownHostsFile;
-use tern_core_store::{AuthKind, HostFilter, HostOverrides, NewHost, Store};
+use tern_core_store::{AuthKind, HostFilter, HostOverrides, NewHost, NewSnippet, Snippet, Store};
 use tern_core_vault::KeyringAvailability;
 use tern_proto::{
     AppearanceDto, AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto,
-    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
-    SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
+    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, NewSnippetDto,
+    SecretUpdateDto, SnippetDto, SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto,
+    SshConfigWarningDto, TagDto,
 };
 
 use crate::auth;
@@ -62,6 +63,7 @@ fn overrides(dto: &HostOverridesDto) -> HostOverrides {
         window_size: dto.window_size,
         reconnect_enabled: dto.reconnect_enabled,
         reconnect_max_attempts: dto.reconnect_max_attempts,
+        forward_agent: dto.forward_agent,
     }
 }
 
@@ -74,6 +76,7 @@ fn overrides_dto(o: &HostOverrides) -> HostOverridesDto {
         window_size: o.window_size,
         reconnect_enabled: o.reconnect_enabled,
         reconnect_max_attempts: o.reconnect_max_attempts,
+        forward_agent: o.forward_agent,
     }
 }
 
@@ -387,6 +390,73 @@ pub async fn delete_folder(state: State<'_, AppState>, id: i64) -> Result<(), St
 }
 
 // ── tags ─────────────────────────────────────────────────────────────────
+
+fn snippet_dto(s: Snippet) -> SnippetDto {
+    SnippetDto {
+        id: s.id,
+        name: s.name,
+        body: s.body,
+        description: s.description,
+    }
+}
+
+#[tauri::command]
+pub async fn list_snippets(state: State<'_, AppState>) -> Result<Vec<SnippetDto>, String> {
+    blocking(&state, |store| {
+        let snippets = store.snippets().list().map_err(|e| e.to_string())?;
+        Ok(snippets.into_iter().map(snippet_dto).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_snippet(
+    state: State<'_, AppState>,
+    snippet: NewSnippetDto,
+) -> Result<i64, String> {
+    blocking(&state, move |store| {
+        store
+            .snippets()
+            .create(&NewSnippet {
+                name: snippet.name,
+                body: snippet.body,
+                description: snippet.description,
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn update_snippet(state: State<'_, AppState>, snippet: SnippetDto) -> Result<(), String> {
+    blocking(&state, move |store| {
+        // Read-then-replace: the DTO carries no timestamps, so the stored
+        // `created_at` is preserved rather than reset by the edit.
+        let existing = store
+            .snippets()
+            .get(snippet.id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no such snippet {}", snippet.id))?;
+        store
+            .snippets()
+            .update(&Snippet {
+                name: snippet.name,
+                body: snippet.body,
+                description: snippet.description,
+                ..existing
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_snippet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    blocking(&state, move |store| {
+        store.snippets().delete(id).map_err(|e| e.to_string())
+    })
+    .await
+}
 
 #[tauri::command]
 pub async fn list_tags(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {

@@ -17,6 +17,7 @@ use crate::folders::FolderRepo;
 use crate::hosts::HostRepo;
 use crate::migrate;
 use crate::settings::SettingsRepo;
+use crate::snippets::SnippetRepo;
 use crate::tags::TagRepo;
 
 #[derive(Clone)]
@@ -89,6 +90,10 @@ impl Store {
 
     pub fn settings(&self) -> SettingsRepo<'_> {
         SettingsRepo::new(self)
+    }
+
+    pub fn snippets(&self) -> SnippetRepo<'_> {
+        SnippetRepo::new(self)
     }
 
     /// Schema version currently applied. Exposed for diagnostics.

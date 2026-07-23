@@ -65,6 +65,7 @@ export function HostNewDialog({
   const [hostname, setHostname] = useState(editing?.hostname ?? "");
   const [port, setPort] = useState(editing ? String(editing.port) : "22");
   const [username, setUsername] = useState(editing?.username ?? "");
+  const [proxyJump, setProxyJump] = useState(editing?.proxyJump ?? "");
   const [first, setFirst] = useState<AuthKind>(editing?.auth ?? "agent");
   const [then, setThen] = useState<AuthKind | "none">(
     editing?.authFallbacks[0] ?? "none",
@@ -75,6 +76,12 @@ export function HostNewDialog({
   // the global default, which the switch shows as on.
   const [reconnect, setReconnect] = useState(
     editing ? editing.overrides.reconnectEnabled !== false : true,
+  );
+  // The mirror image of `reconnect`: on only when the host explicitly opted in.
+  // A new host starts off, and an absent override reads as off rather than as
+  // "inherit" — there is no global agent-forwarding default to inherit.
+  const [forwardAgent, setForwardAgent] = useState(
+    editing?.overrides.forwardAgent === true,
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -207,12 +214,17 @@ export function HostNewDialog({
             username: username.trim(),
             auth: first,
             authFallbacks: then === "none" ? [] : [then],
+            proxyJump: proxyJump.trim() || null,
             keyPath: usesKey ? keyPath.trim() || null : null,
             // Preserve any other overrides (term, keepalive, …); only the
             // reconnect opt-out is edited here. null clears it back to inherit.
             overrides: {
               ...editing.overrides,
               reconnectEnabled: reconnect ? null : false,
+              // Written either way, unlike reconnect above: turning it off has
+              // to store a decision, not fall back to a default that could
+              // later change underneath a host the user switched off.
+              forwardAgent,
             },
           },
           secretUpdate(),
@@ -227,10 +239,14 @@ export function HostNewDialog({
             username: username.trim(),
             auth: first,
             authFallbacks: then === "none" ? [] : [then],
+            proxyJump: proxyJump.trim() || null,
             keyPath: usesKey ? keyPath.trim() || null : null,
             // Only the opt-out is stored; leaving it on inherits the global
             // default, so a later change to that default still reaches this host.
-            overrides: reconnect ? undefined : { reconnectEnabled: false },
+            overrides: {
+              ...(reconnect ? {} : { reconnectEnabled: false }),
+              ...(forwardAgent ? { forwardAgent: true } : {}),
+            },
           },
           store || undefined,
         );
@@ -292,6 +308,23 @@ export function HostNewDialog({
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} />
               }
             />
+          </Field>
+
+          <Field>
+            <FieldLabel>ProxyJump</FieldLabel>
+            <FieldControl
+              render={
+                <Input
+                  placeholder="bastion, or user@host:port (comma-separated for chains)"
+                  value={proxyJump}
+                  onChange={(e) => setProxyJump(e.target.value)}
+                />
+              }
+            />
+            <p className="text-xs text-[var(--lilt-text-subtle)]">
+              Route through one or more jump hosts. A hop matching a saved host reuses its
+              credentials; otherwise the SSH agent is used.
+            </p>
           </Field>
 
           <Field>
@@ -402,6 +435,29 @@ export function HostNewDialog({
               onCheckedChange={setReconnect}
               aria-labelledby="reconnect-label"
             />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <span id="forward-agent-label" className="text-sm text-[var(--lilt-text)]">
+                Forward my ssh-agent to this host
+              </span>
+              <Switch
+                checked={forwardAgent}
+                onCheckedChange={setForwardAgent}
+                aria-labelledby="forward-agent-label"
+              />
+            </div>
+            {/* Shown only when it is on: a warning about a switch you have not
+                touched is noise, and noise is what stops warnings being read. */}
+            {forwardAgent && (
+              <p className="mt-1.5 text-xs text-[var(--lilt-warning-text,var(--lilt-danger-text))]">
+                While you are connected, anyone with root on this host can use your agent
+                to log in anywhere your keys are trusted. They cannot copy the keys. Turn
+                this on for hosts you trust to reach further hosts — never on a shared or
+                untrusted machine.
+              </p>
+            )}
           </div>
 
           {error && <p className="text-xs text-[var(--lilt-danger-text)]">{error}</p>}

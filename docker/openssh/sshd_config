@@ -19,6 +19,11 @@ PubkeyAuthentication yes
 KbdInteractiveAuthentication no
 UseDNS no
 AllowTcpForwarding yes
+
+# Defaulted to `yes` by OpenSSH, but stated so the agent-forwarding tests fail
+# loudly rather than quietly becoming tests of nothing if a future image ships a
+# different default.
+AllowAgentForwarding yes
 AcceptEnv TERM
 Subsystem sftp internal-sftp
 

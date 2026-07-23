@@ -11,13 +11,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tern_core_ssh::{
-    AuthMethod, HostKeyCallback, SessionConfig, ShellChannel, SshSession, accept_any_host_key,
+    AuthMethod, HostKeyCallback, JumpHop, SessionConfig, ShellChannel, SshSession,
+    accept_any_host_key,
 };
 
 const OPENSSH_PORT: u16 = 2222;
 const DROPBEAR_PORT: u16 = 2223;
 /// `PasswordAuthentication no`; see the compose service of the same name.
 const NOPASSWORD_PORT: u16 = 2224;
+/// Bastion for the `ProxyJump` tests; fronts the port-less `openssh-internal`.
+const JUMP_PORT: u16 = 2225;
 
 fn rig_host() -> String {
     std::env::var("TERN_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".into())
@@ -496,4 +499,165 @@ async fn changed_host_key_is_refused_until_removed() {
     assert_eq!(verdict, tern_core_ssh::HostKeyVerdict::Unknown);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `ProxyJump` execution, end to end: the target (`openssh-internal`) publishes no
+/// port and its name resolves only on the segmented docker network, so the one
+/// way to reach it is by tunneling through the bastion. A wrong direct-tcpip
+/// chain cannot connect at all — which is exactly what this asserts works.
+#[tokio::test]
+async fn reaches_a_segmented_host_only_via_proxy_jump() {
+    require_rig!(JUMP_PORT);
+    let cfg = SessionConfig {
+        jumps: vec![JumpHop {
+            host: rig_host(),
+            port: JUMP_PORT,
+            username: "tern".into(),
+            auth: vec![key_auth()],
+        }],
+        // The docker service name, resolvable only from inside the jump.
+        ..SessionConfig::new("openssh-internal", "tern", key_auth())
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("connect to the segmented host through the jump");
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+    shell.write("echo jumped-$((6*7))\n").await.expect("write");
+    read_until(&mut shell, "jumped-42", Duration::from_secs(10)).await;
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// The negative control: without the jump the segmented host is unreachable —
+/// its name does not resolve on the host and it has no published port. This is
+/// what makes the test above about the *jump*, not about mere connectivity.
+#[tokio::test]
+async fn the_segmented_host_is_unreachable_without_the_jump() {
+    require_rig!(JUMP_PORT);
+    let cfg = SessionConfig {
+        connect_timeout: Duration::from_secs(3),
+        ..SessionConfig::new("openssh-internal", "tern", key_auth())
+    };
+    let result = SshSession::connect(cfg, accept_any_host_key()).await;
+    assert!(
+        result.is_err(),
+        "the segmented host must be unreachable without the jump"
+    );
+}
+
+/// Agent forwarding needs a local agent to bridge *to*. Unlike the rig, that is
+/// the developer's own environment, so the tests below skip rather than fail
+/// when there is none.
+macro_rules! require_local_agent {
+    () => {
+        match std::env::var("SSH_AUTH_SOCK") {
+            Ok(sock) if !sock.is_empty() => sock,
+            _ => {
+                eprintln!("SKIP: no local ssh-agent (SSH_AUTH_SOCK unset)");
+                return;
+            }
+        }
+    };
+}
+
+/// End-to-end proof that the forwarded channel is bridged, not merely accepted.
+///
+/// russh's default handler accepts an agent channel and then drops it, which
+/// looks identical from the client side and fails only on the remote — so a
+/// test that checked our own state would pass against a bridge that does
+/// nothing. This drives the whole loop instead: `ssh-add` on the remote opens
+/// the forwarded socket, sshd opens a channel back to us, our handler copies it
+/// to the local agent, and the agent's answer returns the same way.
+///
+/// The assertion is on what `ssh-add` *says*, not on its exit code. A bridge
+/// that accepts and then drops the channel — russh's default, and the exact
+/// regression this guards — still exits 1, indistinguishable from an agent that
+/// is reachable but holds no keys. The message is not ambiguous: a reachable
+/// agent reports its identities or says it has none, while a dropped channel
+/// produces a read error. So a developer whose agent holds no keys still gets a
+/// real test.
+#[tokio::test]
+async fn agent_forwarding_reaches_the_local_agent() {
+    require_rig!(OPENSSH_PORT);
+    require_local_agent!();
+
+    let cfg = SessionConfig {
+        port: OPENSSH_PORT,
+        forward_agent: true,
+        ..SessionConfig::new(rig_host(), "tern", key_auth())
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("connect to rig");
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+
+    // sshd only sets SSH_AUTH_SOCK when it has set up a forwarding socket, so
+    // this alone separates "the request arrived" from "nothing was requested".
+    // The `$((0+0))` is what keeps the needle out of the PTY's echo of the
+    // command itself — the same trick the echo tests above use.
+    shell
+        .write("echo \"sock$((0+0))=${SSH_AUTH_SOCK:-none}\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "sock0=", Duration::from_secs(10)).await;
+    let sock = out
+        .split("sock0=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("socket path in output");
+    assert_ne!(sock, "none", "sshd set up no agent socket on the remote");
+
+    shell
+        .write("echo \"begin$((0+0))\"; ssh-add -l 2>&1; echo \"end$((0+0))\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "end0", Duration::from_secs(10)).await;
+    let said = out
+        .split("begin0")
+        .nth(1)
+        .and_then(|rest| rest.split("end0").next())
+        .expect("ssh-add output between the markers")
+        .trim()
+        .to_owned();
+
+    assert!(
+        !said.to_ascii_lowercase().contains("error"),
+        "the remote could not talk to the forwarded agent — the bridge is not \
+         copying bytes. ssh-add said: {said:?}",
+    );
+    assert!(
+        // Either answer proves the local agent replied through the bridge.
+        said.contains("SHA256:") || said.contains("no identities"),
+        "unexpected ssh-add output {said:?}; is ssh-add installed in the rig image?",
+    );
+
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// The control that makes the test above mean something, and the one that
+/// matters for security: a session that did not opt in gets no agent socket on
+/// the remote at all. If this ever passes trivially — because forwarding leaked
+/// on by default — the whole opt-in is decorative.
+#[tokio::test]
+async fn no_agent_is_forwarded_unless_the_host_opted_in() {
+    require_rig!(OPENSSH_PORT);
+    let session = connect(OPENSSH_PORT, key_auth()).await;
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+    shell
+        .write("echo \"sock$((0+0))=${SSH_AUTH_SOCK:-none}\"\n")
+        .await
+        .expect("write");
+    let out = read_until(&mut shell, "sock0=", Duration::from_secs(10)).await;
+    let sock = out
+        .split("sock0=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("socket path in output");
+    assert_eq!(
+        sock, "none",
+        "a session that never requested forwarding was given an agent socket",
+    );
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
 }
