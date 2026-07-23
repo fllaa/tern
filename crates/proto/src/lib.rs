@@ -13,8 +13,9 @@ mod store;
 
 pub use store::{
     AppearanceDto, AuthKindDto, FolderDto, HostDto, HostFilterDto, HostOverridesDto, KeyInfoDto,
-    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, SecretUpdateDto,
-    SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto, SshConfigWarningDto, TagDto,
+    KeyringStatusDto, KnownHostEntryDto, KnownHostsImportReportDto, NewHostDto, NewSnippetDto,
+    SecretUpdateDto, SnippetDto, SshConfigCandidateDto, SshConfigImportResultDto, SshConfigScanDto,
+    SshConfigWarningDto, TagDto,
 };
 
 /// Opaque identifier for a terminal session (SSH or local PTY).

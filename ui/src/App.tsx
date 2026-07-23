@@ -32,6 +32,8 @@ import { HostSidebar } from "./components/HostSidebar";
 import { PasteWarningDialog } from "./components/PasteWarningDialog";
 import { StatusPill } from "./components/SessionStatus";
 import { SessionTabs } from "./components/SessionTabs";
+import { SnippetRunDialog } from "./components/SnippetRunDialog";
+import { SnippetsDialog } from "./components/SnippetsDialog";
 import { SshConfigImportDialog } from "./components/SshConfigImport";
 import { TerminalMount } from "./components/TerminalMount";
 import { TerminalSearch } from "./components/TerminalSearch";
@@ -57,6 +59,8 @@ import {
 } from "./lib/hosts-ipc";
 import type { HostKeyPrompt, SessionEvent } from "./lib/ipc";
 import { eventAccel } from "./lib/shortcuts";
+import { listSnippets, type Snippet } from "./lib/snippets-ipc";
+import { hostContext, variablesIn } from "./lib/substitute";
 import * as controller from "./session/controller";
 import { collectPaneIds, neighbourPane, type SplitDir } from "./store/layout";
 import { relativeTab, tabAtIndex, useSessions } from "./store/sessions";
@@ -77,6 +81,9 @@ export default function App() {
   const [palette, setPalette] = useState(false);
   const [searching, setSearching] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [runningSnippet, setRunningSnippet] = useState<Snippet | null>(null);
   const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
   const [showAppearance, setShowAppearance] = useState(false);
   // Non-null when this machine has no working credential store. A persistent
@@ -122,6 +129,19 @@ export default function App() {
   useEffect(() => {
     void refresh(query);
   }, [query, refresh]);
+
+  const refreshSnippets = useCallback(async () => {
+    try {
+      setSnippets(await listSnippets());
+    } catch {
+      // A snippet library that will not load must not block the shell — the
+      // manager surfaces the real error when it is opened.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSnippets();
+  }, [refreshSnippets]);
 
   // App-level shortcuts. Bound on window so they fire even while a terminal
   // holds focus — xterm lets bound chords bubble because the terminal's own key
@@ -362,6 +382,41 @@ export default function App() {
     [closeTab],
   );
 
+  // Send an expanded snippet to the focused pane, through the same
+  // broadcast-aware path as typing — so a broadcasting tab fans it out too.
+  // The trailing newline is what makes "run" actually run.
+  const sendSnippet = useCallback(
+    (text: string) => {
+      const st = useSessions.getState();
+      const tab = st.activeId ? st.tabs[st.activeId] : null;
+      if (!tab) return;
+      writeData(tab.activePaneId, tab.id, text.endsWith("\n") ? text : `${text}\n`);
+    },
+    [writeData],
+  );
+
+  const runSnippet = useCallback(
+    (id: number) => {
+      const snippet = snippets.find((s) => s.id === id);
+      if (!snippet) return;
+      const st = useSessions.getState();
+      const tab = st.activeId ? st.tabs[st.activeId] : null;
+      if (!tab) {
+        setNotice("Open a session before running a snippet.");
+        return;
+      }
+      // Nothing to fill in: send it straight through. Anything with a
+      // placeholder goes via the dialog, which is also where the expanded
+      // command is shown before it reaches a live shell.
+      if (variablesIn(snippet.body).length === 0) {
+        sendSnippet(snippet.body);
+        return;
+      }
+      setRunningSnippet(snippet);
+    },
+    [snippets, sendSnippet],
+  );
+
   const answerPrompt = useCallback((accept: boolean) => {
     decideRef.current?.(accept);
     decideRef.current = null;
@@ -499,11 +554,19 @@ export default function App() {
       const id = useSessions.getState().activeId;
       if (id) useSessions.getState().toggleBroadcast(id);
     },
+    runSnippet,
+    manageSnippets: () => setSnippetsOpen(true),
   };
   cmdCtxRef.current = cmdCtx;
 
   const activeTab = activeId ? tabs[activeId] : null;
   const activePane = activeTab ? (panes[activeTab.activePaneId] ?? null) : null;
+  // The focused pane's host record, so a snippet's {{host}}/{{user}}/{{port}}
+  // need no typing. Null for a local shell, which has no host.
+  const activeHost =
+    activePane?.hostId != null
+      ? (hosts.find((h) => h.id === activePane.hostId) ?? null)
+      : null;
 
   return (
     <div className="h-full bg-[var(--lilt-canvas)] font-sans text-[var(--lilt-text)]">
@@ -697,8 +760,27 @@ export default function App() {
           if (!open) splitDirRef.current = null;
         }}
         hosts={hosts}
+        snippets={snippets}
         ctx={cmdCtx}
       />
+      {snippetsOpen && (
+        <SnippetsDialog
+          onClose={() => setSnippetsOpen(false)}
+          onChanged={() => void refreshSnippets()}
+        />
+      )}
+      {runningSnippet && (
+        <SnippetRunDialog
+          snippet={runningSnippet}
+          context={hostContext(activeHost)}
+          broadcasting={activeTab?.broadcast ?? false}
+          onCancel={() => setRunningSnippet(null)}
+          onRun={(text) => {
+            sendSnippet(text);
+            setRunningSnippet(null);
+          }}
+        />
+      )}
       {showAppearance && (
         <AppearanceDialog
           value={appearance}

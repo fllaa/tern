@@ -2,7 +2,7 @@
 //! declaratively — folder cycles, NULL-parent name uniqueness, and the
 //! delete semantics that decide whether a host record survives.
 
-use tern_core_store::{AuthKind, HostFilter, HostSource, NewHost, Store, StoreError};
+use tern_core_store::{AuthKind, HostFilter, HostSource, NewHost, NewSnippet, Store, StoreError};
 
 fn store() -> Store {
     Store::open_in_memory().expect("open in-memory store")
@@ -456,4 +456,83 @@ fn an_unknown_stored_fallback_is_dropped_rather_than_failing_the_read() {
     assert!(decode_auth_fallbacks(None).is_empty());
     // Empty encodes to NULL, so "no fallback" is never stored as data.
     assert_eq!(encode_auth_fallbacks(&[]), None);
+}
+
+fn snippet(name: &str, body: &str) -> NewSnippet {
+    NewSnippet {
+        name: name.into(),
+        body: body.into(),
+        description: None,
+    }
+}
+
+#[test]
+fn snippet_round_trips_through_create_and_get() {
+    let s = store();
+    let draft = NewSnippet {
+        name: "tail syslog".into(),
+        body: "tail -f /var/log/syslog".into(),
+        description: Some("follow the system log".into()),
+    };
+    let id = s.snippets().create(&draft).expect("create");
+    let got = s.snippets().get(id).expect("get").expect("exists");
+
+    assert_eq!(got.name, "tail syslog");
+    assert_eq!(got.body, "tail -f /var/log/syslog");
+    assert_eq!(got.description.as_deref(), Some("follow the system log"));
+    // Created and updated are stamped together, so an untouched snippet reads
+    // back with them equal.
+    assert_eq!(got.created_at, got.updated_at);
+}
+
+#[test]
+fn snippets_list_by_name_case_insensitively() {
+    let s = store();
+    for name in ["zebra", "Alpha", "middle"] {
+        s.snippets().create(&snippet(name, "x")).expect("create");
+    }
+    let names: Vec<String> = s
+        .snippets()
+        .list()
+        .expect("list")
+        .into_iter()
+        .map(|x| x.name)
+        .collect();
+    assert_eq!(names, vec!["Alpha", "middle", "zebra"]);
+}
+
+#[test]
+fn updating_a_snippet_replaces_the_whole_record() {
+    let s = store();
+    let id = s.snippets().create(&snippet("old", "one")).expect("create");
+    let mut got = s.snippets().get(id).expect("get").expect("exists");
+    got.name = "new".into();
+    got.body = "two".into();
+    got.description = Some("now described".into());
+    s.snippets().update(&got).expect("update");
+
+    let after = s.snippets().get(id).expect("get").expect("exists");
+    assert_eq!(after.name, "new");
+    assert_eq!(after.body, "two");
+    assert_eq!(after.description.as_deref(), Some("now described"));
+}
+
+/// The name is all the palette can show, so a blank one is refused rather than
+/// stored as a row nobody can find again.
+#[test]
+fn a_snippet_needs_a_name() {
+    let s = store();
+    assert!(matches!(
+        s.snippets().create(&snippet("   ", "x")),
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+#[test]
+fn deleting_an_unknown_snippet_is_an_error_not_a_silent_no_op() {
+    let s = store();
+    assert!(matches!(
+        s.snippets().delete(999),
+        Err(StoreError::NotFound { .. })
+    ));
 }

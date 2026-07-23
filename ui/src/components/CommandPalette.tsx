@@ -21,15 +21,17 @@ import { paletteCommands } from "../commands/registry";
 import type { Command as Cmd, CommandContext, CommandGroupId } from "../commands/types";
 import type { Host } from "../lib/hosts-ipc";
 import { accelLabel } from "../lib/shortcuts";
+import type { Snippet } from "../lib/snippets-ipc";
 import { useSessions } from "../store/sessions";
 
 const GROUP_LABELS: Record<CommandGroupId, string> = {
   session: "Session",
   tabs: "Tabs",
   hosts: "Hosts",
+  snippets: "Snippets",
   view: "View",
 };
-const GROUP_ORDER: CommandGroupId[] = ["session", "tabs", "hosts", "view"];
+const GROUP_ORDER: CommandGroupId[] = ["session", "tabs", "hosts", "snippets", "view"];
 
 interface PaletteGroup {
   id: CommandGroupId;
@@ -48,11 +50,13 @@ export function CommandPalette({
   open,
   onOpenChange,
   hosts,
+  snippets,
   ctx,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   hosts: Host[];
+  snippets: Snippet[];
   ctx: CommandContext;
 }) {
   const order = useSessions((s) => s.order);
@@ -65,13 +69,13 @@ export function CommandPalette({
       .map((id) => tabs[id])
       .filter(Boolean)
       .map((t) => ({ id: t.id, title: panes[t.activePaneId]?.title ?? "" }));
-    const all = paletteCommands(hosts, tabLabels);
+    const all = paletteCommands(hosts, tabLabels, snippets);
     return GROUP_ORDER.map((id) => ({
       id,
       label: GROUP_LABELS[id],
       items: all.filter((c) => c.group === id),
     })).filter((group) => group.items.length > 0);
-  }, [hosts, order, tabs, panes]);
+  }, [hosts, snippets, order, tabs, panes]);
 
   const run = (cmd: Cmd) => {
     // Run before closing: split-fill commands read splitDirRef synchronously,

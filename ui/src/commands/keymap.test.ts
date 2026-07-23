@@ -24,6 +24,8 @@ function noopCtx(): CommandContext {
     focusNextPane: vi.fn(),
     toggleBroadcast: vi.fn(),
     duplicateActivePane: vi.fn(),
+    runSnippet: vi.fn(),
+    manageSnippets: vi.fn(),
   };
 }
 

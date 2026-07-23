@@ -21,6 +21,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "auth_fallbacks",
         include_str!("../migrations/0002_auth_fallbacks.sql"),
     ),
+    (
+        3,
+        "snippets",
+        include_str!("../migrations/0003_snippets.sql"),
+    ),
 ];
 
 /// Highest schema version this binary knows how to produce.

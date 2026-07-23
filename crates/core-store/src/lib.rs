@@ -1,4 +1,4 @@
-//! Local `SQLite` store for hosts, folders, tags, and settings.
+//! Local `SQLite` store for hosts, folders, tags, snippets, and settings.
 //!
 //! Two things deliberately live *outside* this crate:
 //!
@@ -21,6 +21,7 @@ mod hosts;
 mod migrate;
 mod model;
 mod settings;
+mod snippets;
 mod ssh_config;
 mod tags;
 
@@ -30,13 +31,14 @@ pub use folders::FolderRepo;
 pub use hosts::HostRepo;
 pub use migrate::target_version as schema_target_version;
 pub use model::{
-    AuthKind, Folder, FolderId, Host, HostFilter, HostId, HostOverrides, HostSource, NewHost, Tag,
-    TagId, decode_auth_fallbacks, encode_auth_fallbacks,
+    AuthKind, Folder, FolderId, Host, HostFilter, HostId, HostOverrides, HostSource, NewHost,
+    NewSnippet, Snippet, SnippetId, Tag, TagId, decode_auth_fallbacks, encode_auth_fallbacks,
 };
 pub use settings::{
     KEY_APPEARANCE, KEY_HASH_KNOWN_HOSTS, KEY_KNOWN_HOSTS_IMPORT_OFFERED, KEY_RECONNECT_ENABLED,
     KEY_RECONNECT_MAX_ATTEMPTS, SettingsRepo,
 };
+pub use snippets::SnippetRepo;
 pub use ssh_config::{
     Candidate as SshConfigCandidate, Disposition as SshConfigDisposition, ImportOutcome,
     Scan as SshConfigScan, Warning as SshConfigWarning, apply as apply_ssh_config,

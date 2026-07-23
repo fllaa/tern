@@ -20,34 +20,49 @@ beforeEach(resetStore);
 
 describe("paletteCommands", () => {
   it("emits a host command per host, with a user@host subtitle", () => {
-    const host = paletteCommands([WEB], []).find((c) => c.id === "host.open:7");
+    const host = paletteCommands([WEB], [], []).find((c) => c.id === "host.open:7");
     expect(host?.title).toBe("web");
     expect(host?.subtitle).toBe("deploy@web.example.com");
     expect(host?.group).toBe("hosts");
   });
 
   it("omits the palette-toggle command — it is chord-only", () => {
-    expect(paletteCommands([], []).some((c) => c.id === "palette.toggle")).toBe(false);
+    expect(paletteCommands([], [], []).some((c) => c.id === "palette.toggle")).toBe(
+      false,
+    );
   });
 
   it("gates action commands on tab state", () => {
-    expect(paletteCommands([], []).some((c) => c.id === "tab.close")).toBe(false);
-    expect(paletteCommands([], []).some((c) => c.id === "tab.next")).toBe(false);
+    expect(paletteCommands([], [], []).some((c) => c.id === "tab.close")).toBe(false);
+    expect(paletteCommands([], [], []).some((c) => c.id === "tab.next")).toBe(false);
 
     useSessions.getState().openTab({ hostId: 1, title: "a" });
-    expect(paletteCommands([], []).some((c) => c.id === "tab.close")).toBe(true);
-    expect(paletteCommands([], []).some((c) => c.id === "tab.next")).toBe(false);
+    expect(paletteCommands([], [], []).some((c) => c.id === "tab.close")).toBe(true);
+    expect(paletteCommands([], [], []).some((c) => c.id === "tab.next")).toBe(false);
 
     useSessions.getState().openTab({ hostId: 2, title: "b" });
-    expect(paletteCommands([], []).some((c) => c.id === "tab.next")).toBe(true);
+    expect(paletteCommands([], [], []).some((c) => c.id === "tab.next")).toBe(true);
   });
 
   it("adds a switch command per open tab", () => {
     const { tabId } = useSessions.getState().openTab({ hostId: 1, title: "alpha" });
-    const cmd = paletteCommands([], [{ id: tabId, title: "alpha" }]).find(
+    const cmd = paletteCommands([], [{ id: tabId, title: "alpha" }], []).find(
       (c) => c.id === `tab.switch:${tabId}`,
     );
     expect(cmd?.title).toBe("alpha");
+  });
+
+  it("adds a run command per snippet, carrying its description", () => {
+    const snippet = {
+      id: 3,
+      name: "restart nginx",
+      body: "systemctl restart {{unit}}",
+      description: "with a prompt",
+    };
+    const cmd = paletteCommands([], [], [snippet]).find((c) => c.id === "snippet.run:3");
+    expect(cmd?.title).toBe("restart nginx");
+    expect(cmd?.subtitle).toBe("with a prompt");
+    expect(cmd?.group).toBe("snippets");
   });
 });
 

@@ -7,7 +7,7 @@
 import type { Accel } from "../lib/shortcuts";
 import type { SplitDir } from "../store/layout";
 
-export type CommandGroupId = "session" | "tabs" | "hosts" | "view";
+export type CommandGroupId = "session" | "tabs" | "hosts" | "snippets" | "view";
 
 /** Every side-effecting operation a command may invoke. App builds this once
  *  and injects it, so commands never reach into React state directly. */
@@ -26,6 +26,9 @@ export interface CommandContext {
   focusNextPane: () => void;
   toggleBroadcast: () => void;
   duplicateActivePane: () => void;
+  /** Run a stored snippet in the focused pane, prompting for variables first. */
+  runSnippet: (id: number) => void;
+  manageSnippets: () => void;
 }
 
 export interface Command {

@@ -5,9 +5,11 @@
 // keymap resolves against the static set alone.
 
 import type { Host } from "../lib/hosts-ipc";
+import type { Snippet } from "../lib/snippets-ipc";
 import { collectPaneIds } from "../store/layout";
 import { useSessions } from "../store/sessions";
 import { hostCommands } from "./hosts";
+import { snippetCommands } from "./snippets";
 import { type TabLabel, tabCommands } from "./tabs";
 import type { Command } from "./types";
 
@@ -121,6 +123,13 @@ export const STATIC_COMMANDS: Command[] = [
     run: (c) => c.toggleBroadcast(),
   },
   {
+    id: "snippet.manage",
+    title: "Manage snippets…",
+    group: "snippets",
+    keywords: ["snippet", "library", "edit"],
+    run: (c) => c.manageSnippets(),
+  },
+  {
     id: "tab.close",
     title: "Close pane",
     group: "tabs",
@@ -167,10 +176,19 @@ export function commandById(id: string): Command | undefined {
 }
 
 /** Everything the palette lists: enabled, non-hidden static commands plus the
- *  dynamic host and tab items. */
-export function paletteCommands(hosts: Host[], tabs: TabLabel[]): Command[] {
+ *  dynamic host, snippet and tab items. */
+export function paletteCommands(
+  hosts: Host[],
+  tabs: TabLabel[],
+  snippets: Snippet[],
+): Command[] {
   const staticVisible = STATIC_COMMANDS.filter(
     (c) => !c.hidden && (!c.enabled || c.enabled()),
   );
-  return [...staticVisible, ...hostCommands(hosts), ...tabCommands(tabs)];
+  return [
+    ...staticVisible,
+    ...hostCommands(hosts),
+    ...snippetCommands(snippets),
+    ...tabCommands(tabs),
+  ];
 }

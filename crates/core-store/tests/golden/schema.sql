@@ -71,6 +71,14 @@ CREATE TABLE settings (
   value      TEXT NOT NULL,   -- JSON scalar or object
   updated_at INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE snippets (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT    NOT NULL,
+  body        TEXT    NOT NULL,
+  description TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
 CREATE TABLE tags (
   id         INTEGER PRIMARY KEY,
   name       TEXT    NOT NULL,

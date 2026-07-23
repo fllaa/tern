@@ -133,6 +133,25 @@ pub struct TagDto {
     pub color: Option<String>,
 }
 
+/// A snippet as the webview sees it. Timestamps are deliberately absent — the
+/// UI orders by name and never shows them, so they stay store-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetDto {
+    pub id: i64,
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewSnippetDto {
+    pub name: String,
+    pub body: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostEntryDto {
