@@ -19,7 +19,7 @@ use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
-use crate::config::{AuthMethod, SessionConfig};
+use crate::config::{AuthMethod, JumpHop, SessionConfig};
 use crate::error::SshError;
 
 /// Depth of the outbound `Bytes` queue between the pump and the consumer.
@@ -102,10 +102,102 @@ impl client::Handler for ClientHandler {
 pub struct SshSession {
     handle: client::Handle<ClientHandler>,
     term: String,
+    /// Intermediate jump-hop sessions, held only to keep their tunnels open.
+    /// A `Handle` owns the sender to its session task; dropping it winds that
+    /// task down and collapses the tunnel the next hop rides on, so the target
+    /// session must outlive every hop before it. Never touched directly.
+    _jumps: Vec<client::Handle<ClientHandler>>,
+}
+
+/// One dial target inside [`SshSession::connect`] — a jump hop or the final
+/// target — as borrowed views into the `SessionConfig`.
+struct Hop<'a> {
+    host: &'a str,
+    port: u16,
+    username: &'a str,
+    auth: &'a [AuthMethod],
+}
+
+impl<'a> Hop<'a> {
+    fn from_jump(j: &'a JumpHop) -> Self {
+        Self {
+            host: &j.host,
+            port: j.port,
+            username: &j.username,
+            auth: &j.auth,
+        }
+    }
+    fn target(cfg: &'a SessionConfig) -> Self {
+        Self {
+            host: &cfg.host,
+            port: cfg.port,
+            username: &cfg.username,
+            auth: &cfg.auth,
+        }
+    }
+}
+
+fn new_handler(
+    hop: &Hop<'_>,
+    on_host_key: &HostKeyCallback,
+    awaiting_user: &Arc<AtomicBool>,
+) -> ClientHandler {
+    ClientHandler {
+        host: hop.host.to_owned(),
+        port: hop.port,
+        on_host_key: Arc::clone(on_host_key),
+        awaiting_user: Arc::clone(awaiting_user),
+    }
+}
+
+/// Poll a connect future under the re-arming host-key timeout.
+///
+/// The timeout bounds the network handshake, not the human at the TOFU dialog:
+/// when it elapses while the host-key callback is blocked on a user decision,
+/// re-arm rather than fail — the user answering is what completes the connect,
+/// within a re-armed window. Re-arming is capped at [`MAX_HOST_KEY_WAIT`] so an
+/// abandoned prompt eventually gives up. A genuinely hung handshake never sets
+/// `awaiting_user`, so it still fails at the first expiry.
+///
+/// Applied per hop, sharing one `awaiting_user`: hops connect sequentially, so
+/// at most one host-key prompt is ever open.
+async fn await_connect(
+    connect: impl Future<Output = Result<client::Handle<ClientHandler>, SshError>>,
+    connect_timeout: Duration,
+    awaiting_user: &AtomicBool,
+) -> Result<client::Handle<ClientHandler>, SshError> {
+    let mut connect = std::pin::pin!(connect);
+    let mut user_waited = Duration::ZERO;
+    loop {
+        match tokio::time::timeout(connect_timeout, &mut connect).await {
+            Ok(result) => {
+                return result.map_err(|e| match e {
+                    SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
+                    other => other,
+                });
+            }
+            Err(_elapsed)
+                if awaiting_user.load(Ordering::Relaxed) && user_waited < MAX_HOST_KEY_WAIT =>
+            {
+                user_waited = user_waited.saturating_add(connect_timeout);
+                debug!(
+                    waited = ?user_waited,
+                    "ssh connect: timeout elapsed while awaiting host-key decision; re-arming",
+                );
+            }
+            Err(_elapsed) => return Err(SshError::ConnectTimeout(connect_timeout)),
+        }
+    }
 }
 
 impl SshSession {
-    /// Connect, verify the host key via `on_host_key`, and authenticate.
+    /// Connect through any `ProxyJump` chain, verify each hop's host key via
+    /// `on_host_key`, and authenticate at each hop.
+    ///
+    /// With no jumps this is a direct TCP connect to the target — the common
+    /// case, and the single-hop path below. With jumps, hop 1 is dialed over
+    /// TCP and every later hop (and the target) rides a direct-tcpip tunnel
+    /// opened on the hop before it.
     pub async fn connect(
         cfg: SessionConfig,
         on_host_key: HostKeyCallback,
@@ -121,17 +213,15 @@ impl SshSession {
             ..client::Config::default()
         });
         let awaiting_user = Arc::new(AtomicBool::new(false));
-        let handler = ClientHandler {
-            host: cfg.host.clone(),
-            port: cfg.port,
-            on_host_key,
-            awaiting_user: Arc::clone(&awaiting_user),
-        };
 
-        // The chain, redacted to labels, is the single most useful line when a
-        // connect misbehaves: it says which methods will be tried and in what
-        // order. `method_label` never emits secret material.
-        let chain = cfg
+        // The dial order: each jump hop, then the target as the final hop. A
+        // one-element chain (no jumps) is exactly the old direct connect.
+        let mut chain: Vec<Hop<'_>> = cfg.jumps.iter().map(Hop::from_jump).collect();
+        chain.push(Hop::target(&cfg));
+
+        // The target chain, redacted to labels, is the single most useful line
+        // when a connect misbehaves. `method_label` never emits secret material.
+        let auth_chain = cfg
             .auth
             .iter()
             .map(method_label)
@@ -141,66 +231,59 @@ impl SshSession {
             host = %cfg.host,
             port = cfg.port,
             user = %cfg.username,
+            hops = cfg.jumps.len(),
             connect_timeout = ?cfg.connect_timeout,
-            auth_chain = %chain,
+            auth_chain = %auth_chain,
             "ssh connect: opening transport",
         );
 
-        // The connect timeout bounds the *network* handshake, not the human at
-        // the TOFU dialog. When it elapses while the host-key callback is
-        // blocked on the user, re-arm rather than fail — the user answering is
-        // what completes the connect, and it does so within a re-armed window.
-        // A genuinely hung handshake never sets `awaiting_user`, so it still
-        // fails at the first expiry.
-        //
-        // The re-arming is capped so an *abandoned* prompt — one superseded by a
-        // later connect that reused the shared UI resolver, say — eventually
-        // fails instead of leaking a task forever. The cap is generous: it is
-        // decision time for a human verifying a fingerprint out of band, not a
-        // network bound.
-        let mut connect = std::pin::pin!(client::connect(
-            config,
-            (cfg.host.as_str(), cfg.port),
-            handler,
-        ));
-        let mut user_waited = Duration::ZERO;
-        let mut handle = loop {
-            match tokio::time::timeout(cfg.connect_timeout, &mut connect).await {
-                Ok(result) => {
-                    break result.map_err(|e| match e {
-                        SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
-                        other => other,
-                    })?;
-                }
-                Err(_elapsed)
-                    if awaiting_user.load(Ordering::Relaxed) && user_waited < MAX_HOST_KEY_WAIT =>
-                {
-                    // Re-arm: fall through to the next loop iteration, which
-                    // polls the same pinned connect future again.
-                    user_waited = user_waited.saturating_add(cfg.connect_timeout);
-                    debug!(
-                        waited = ?user_waited,
-                        "ssh connect: timeout elapsed while awaiting host-key decision; re-arming",
-                    );
-                }
-                Err(_elapsed) => {
-                    warn!(
-                        host = %cfg.host,
-                        connect_timeout = ?cfg.connect_timeout,
-                        "ssh connect: transport handshake timed out",
-                    );
-                    return Err(SshError::ConnectTimeout(cfg.connect_timeout));
-                }
-            }
-        };
+        // Hop 1 over TCP.
+        let mut hops = chain.iter();
+        let first = hops.next().expect("chain always ends with the target");
+        let connect = client::connect(
+            Arc::clone(&config),
+            (first.host, first.port),
+            new_handler(first, &on_host_key, &awaiting_user),
+        );
+        let mut prev = await_connect(connect, cfg.connect_timeout, &awaiting_user).await?;
+        authenticate(&mut prev, first.username, first.auth).await?;
+        debug!(host = %first.host, "ssh connect: hop authenticated");
 
-        debug!(host = %cfg.host, "ssh connect: transport up; authenticating");
-        authenticate(&mut handle, &cfg).await?;
+        // Each later hop rides a tunnel opened on the previous one. The prior
+        // handles are retained (see `SshSession::_jumps`) so their tunnels stay
+        // up for the life of the target session.
+        let mut jumps: Vec<client::Handle<ClientHandler>> = Vec::new();
+        for hop in hops {
+            let open = prev.channel_open_direct_tcpip(
+                hop.host.to_owned(),
+                u32::from(hop.port),
+                "127.0.0.1",
+                0,
+            );
+            // A black-holed tunnel should fail like a hung handshake, not hang.
+            let channel = tokio::time::timeout(cfg.connect_timeout, open)
+                .await
+                .map_err(|_| SshError::ConnectTimeout(cfg.connect_timeout))??;
+            let stream = channel.into_stream();
+            jumps.push(prev);
+
+            let connect = client::connect_stream(
+                Arc::clone(&config),
+                stream,
+                new_handler(hop, &on_host_key, &awaiting_user),
+            );
+            let mut handle = await_connect(connect, cfg.connect_timeout, &awaiting_user).await?;
+            authenticate(&mut handle, hop.username, hop.auth).await?;
+            debug!(host = %hop.host, "ssh connect: hop authenticated");
+            prev = handle;
+        }
+
         info!(host = %cfg.host, user = %cfg.username, "ssh connect: session ready");
-
+        // Clone `term` rather than move it: `chain` still borrows `cfg`.
         Ok(Self {
-            handle,
-            term: cfg.term,
+            handle: prev,
+            term: cfg.term.clone(),
+            _jumps: jumps,
         })
     }
 
@@ -358,14 +441,15 @@ impl ShellChannel {
 /// the password" is the case being served.
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
-    cfg: &SessionConfig,
+    user: &str,
+    auth: &[AuthMethod],
 ) -> Result<(), SshError> {
     // What the server still offers, once it has told us. `None` means it has
     // not yet, so nothing is skipped on the first attempt.
     let mut offered: Option<MethodSet> = None;
     let mut attempts: Vec<String> = Vec::new();
 
-    for method in &cfg.auth {
+    for method in auth {
         let label = method_label(method);
 
         // Deliberately conservative: skip only against a non-empty list. The
@@ -382,7 +466,7 @@ async fn authenticate(
         }
 
         debug!(method = %label, "auth: attempting");
-        match try_method(handle, &cfg.username, method).await {
+        match try_method(handle, user, method).await {
             Ok(AuthResult::Success) => {
                 info!(method = %label, "auth: accepted");
                 return Ok(());

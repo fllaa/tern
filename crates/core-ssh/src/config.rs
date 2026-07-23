@@ -62,6 +62,18 @@ impl fmt::Debug for AuthMethod {
     }
 }
 
+/// One hop in a `ProxyJump` chain: where to dial, and how to authenticate there.
+///
+/// Same auth shape as [`SessionConfig`] — each hop is a full SSH login in its
+/// own right, just reached over the previous hop's tunnel rather than TCP.
+#[derive(Debug, Clone)]
+pub struct JumpHop {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: Vec<AuthMethod>,
+}
+
 /// Everything needed to establish an SSH session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -89,6 +101,11 @@ pub struct SessionConfig {
     /// is the backpressure link: when the consumer stops reading, this fills,
     /// the session loop stalls, and the SSH window drains.
     pub channel_buffer_size: usize,
+    /// `ProxyJump` chain in dial order, nearest jump first. Empty means a direct
+    /// connection — the common case and what [`Self::new`] builds. Each hop is
+    /// dialed over the previous hop's tunnel; the target session runs over the
+    /// last hop.
+    pub jumps: Vec<JumpHop>,
 }
 
 impl SessionConfig {
@@ -108,6 +125,7 @@ impl SessionConfig {
             connect_timeout: Duration::from_secs(10),
             window_size: 512 * 1024,
             channel_buffer_size: 16,
+            jumps: Vec::new(),
         }
     }
 }

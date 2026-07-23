@@ -65,6 +65,7 @@ export function HostNewDialog({
   const [hostname, setHostname] = useState(editing?.hostname ?? "");
   const [port, setPort] = useState(editing ? String(editing.port) : "22");
   const [username, setUsername] = useState(editing?.username ?? "");
+  const [proxyJump, setProxyJump] = useState(editing?.proxyJump ?? "");
   const [first, setFirst] = useState<AuthKind>(editing?.auth ?? "agent");
   const [then, setThen] = useState<AuthKind | "none">(
     editing?.authFallbacks[0] ?? "none",
@@ -207,6 +208,7 @@ export function HostNewDialog({
             username: username.trim(),
             auth: first,
             authFallbacks: then === "none" ? [] : [then],
+            proxyJump: proxyJump.trim() || null,
             keyPath: usesKey ? keyPath.trim() || null : null,
             // Preserve any other overrides (term, keepalive, …); only the
             // reconnect opt-out is edited here. null clears it back to inherit.
@@ -227,6 +229,7 @@ export function HostNewDialog({
             username: username.trim(),
             auth: first,
             authFallbacks: then === "none" ? [] : [then],
+            proxyJump: proxyJump.trim() || null,
             keyPath: usesKey ? keyPath.trim() || null : null,
             // Only the opt-out is stored; leaving it on inherits the global
             // default, so a later change to that default still reaches this host.
@@ -292,6 +295,23 @@ export function HostNewDialog({
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} />
               }
             />
+          </Field>
+
+          <Field>
+            <FieldLabel>ProxyJump</FieldLabel>
+            <FieldControl
+              render={
+                <Input
+                  placeholder="bastion, or user@host:port (comma-separated for chains)"
+                  value={proxyJump}
+                  onChange={(e) => setProxyJump(e.target.value)}
+                />
+              }
+            />
+            <p className="text-xs text-[var(--lilt-text-subtle)]">
+              Route through one or more jump hosts. A hop matching a saved host reuses its
+              credentials; otherwise the SSH agent is used.
+            </p>
           </Field>
 
           <Field>

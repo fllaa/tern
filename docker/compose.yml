@@ -28,5 +28,26 @@ services:
     volumes:
       - ../.rig/ssh/authorized_keys:/rig/authorized_keys:ro
 
+  # ProxyJump topology: a bastion straddling both networks, and an internal host
+  # with NO published ports — reachable only by tunneling through the bastion.
+  # The jump tests connect to `openssh-internal` (by its service name, which
+  # resolves on the segmented network) via `openssh-jump`.
+  openssh-jump:
+    build: ./openssh
+    ports:
+      - "127.0.0.1:2225:22"
+    networks: [default, segmented]
+    volumes:
+      - ../.rig/ssh/authorized_keys:/rig/authorized_keys:ro
+
+  openssh-internal:
+    build: ./openssh
+    networks: [segmented]
+    volumes:
+      - ../.rig/ssh/authorized_keys:/rig/authorized_keys:ro
+
+networks:
+  segmented: {}
+
 volumes:
   bench:

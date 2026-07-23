@@ -11,13 +11,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tern_core_ssh::{
-    AuthMethod, HostKeyCallback, SessionConfig, ShellChannel, SshSession, accept_any_host_key,
+    AuthMethod, HostKeyCallback, JumpHop, SessionConfig, ShellChannel, SshSession,
+    accept_any_host_key,
 };
 
 const OPENSSH_PORT: u16 = 2222;
 const DROPBEAR_PORT: u16 = 2223;
 /// `PasswordAuthentication no`; see the compose service of the same name.
 const NOPASSWORD_PORT: u16 = 2224;
+/// Bastion for the `ProxyJump` tests; fronts the port-less `openssh-internal`.
+const JUMP_PORT: u16 = 2225;
 
 fn rig_host() -> String {
     std::env::var("TERN_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".into())
@@ -496,4 +499,48 @@ async fn changed_host_key_is_refused_until_removed() {
     assert_eq!(verdict, tern_core_ssh::HostKeyVerdict::Unknown);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `ProxyJump` execution, end to end: the target (`openssh-internal`) publishes no
+/// port and its name resolves only on the segmented docker network, so the one
+/// way to reach it is by tunneling through the bastion. A wrong direct-tcpip
+/// chain cannot connect at all — which is exactly what this asserts works.
+#[tokio::test]
+async fn reaches_a_segmented_host_only_via_proxy_jump() {
+    require_rig!(JUMP_PORT);
+    let cfg = SessionConfig {
+        jumps: vec![JumpHop {
+            host: rig_host(),
+            port: JUMP_PORT,
+            username: "tern".into(),
+            auth: vec![key_auth()],
+        }],
+        // The docker service name, resolvable only from inside the jump.
+        ..SessionConfig::new("openssh-internal", "tern", key_auth())
+    };
+    let session = SshSession::connect(cfg, accept_any_host_key())
+        .await
+        .expect("connect to the segmented host through the jump");
+    let mut shell = session.open_shell(80, 24).await.expect("open shell");
+    shell.write("echo jumped-$((6*7))\n").await.expect("write");
+    read_until(&mut shell, "jumped-42", Duration::from_secs(10)).await;
+    shell.close().await.expect("close");
+    session.disconnect().await.expect("disconnect");
+}
+
+/// The negative control: without the jump the segmented host is unreachable —
+/// its name does not resolve on the host and it has no published port. This is
+/// what makes the test above about the *jump*, not about mere connectivity.
+#[tokio::test]
+async fn the_segmented_host_is_unreachable_without_the_jump() {
+    require_rig!(JUMP_PORT);
+    let cfg = SessionConfig {
+        connect_timeout: Duration::from_secs(3),
+        ..SessionConfig::new("openssh-internal", "tern", key_auth())
+    };
+    let result = SshSession::connect(cfg, accept_any_host_key()).await;
+    assert!(
+        result.is_err(),
+        "the segmented host must be unreachable without the jump"
+    );
 }

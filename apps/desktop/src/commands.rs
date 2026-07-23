@@ -534,6 +534,29 @@ async fn reconnect_policy_for(store: &Store, host: &tern_core_store::Host) -> Re
     }
 }
 
+/// Resolve a host's `ProxyJump` chain off the DB/keyring thread. Empty when the
+/// host has no `proxy_jump` set. Re-resolved per connect attempt (like auth), so
+/// a rotated jump credential fails loudly rather than reconnecting stale.
+async fn resolve_jumps_for(
+    store: &Store,
+    proxy_jump: Option<&str>,
+    default_user: &str,
+) -> Vec<tern_core_ssh::JumpHop> {
+    let Some(spec) = proxy_jump
+        .map(str::to_owned)
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return Vec::new();
+    };
+    let store = store.clone();
+    let default_user = default_user.to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::jump::resolve_jumps(&store, &spec, &default_user)
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// One (re)connect to a saved host, from the record and the keyring outward.
 /// Shared by the initial connect's reconnector and every retry after it.
 #[allow(clippy::too_many_arguments)] // owned pieces the spawned closure must carry
@@ -571,7 +594,8 @@ async fn establish_saved_host(
     // with a stale copy. A degraded-keyring note is dropped here — it was
     // already shown on the first connect and would only repeat.
     let resolved = crate::auth::auth_for_host(&host);
-    let cfg = crate::session_cfg::for_host(&host, resolved.methods, window);
+    let jumps = resolve_jumps_for(&store, host.proxy_jump.as_deref(), &host.username).await;
+    let cfg = crate::session_cfg::for_host(&host, resolved.methods, jumps, window);
 
     let hash_store = store.clone();
     let hash_new = tauri::async_runtime::spawn_blocking(move || {
@@ -781,7 +805,9 @@ pub async fn open_session(
                 let _ = events.send(SessionEvent::Warning { message: note });
             }
             let policy = reconnect_policy_for(&store, &host).await;
-            let ssh_cfg = crate::session_cfg::for_host(&host, resolved.methods, req.window_size);
+            let jumps = resolve_jumps_for(&store, host.proxy_jump.as_deref(), &host.username).await;
+            let ssh_cfg =
+                crate::session_cfg::for_host(&host, resolved.methods, jumps, req.window_size);
 
             // The supervisor reconnects by re-running the saved-host establish
             // from owned state; skip building it when the policy can never fire.
